@@ -48,7 +48,7 @@ object UpdateConfig {
         "https://v4.gh-proxy.org/",
     )
 
-    const val CURRENT_VERSION = "1.2.6"
+    const val CURRENT_VERSION = "1.2.7"
 
     val owner: String = REPO.substringBefore("/")
     val repo: String = REPO.substringAfter("/")
