@@ -1,0 +1,15 @@
+<configuration>
+    <!-- spider-host 通过 stdout 与 Rust UI 通信（JSON 行协议），
+         日志必须全部走 stderr，禁止污染 stdout -->
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{24} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="STDERR"/>
+    </root>
+    <logger name="com.github.catvod" level="DEBUG"/>
+</configuration>

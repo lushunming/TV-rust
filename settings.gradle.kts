@@ -44,3 +44,4 @@ dependencyResolutionManagement {
 
 include(":composeApp")
 include(":Web-Player")
+include(":spider-host")
