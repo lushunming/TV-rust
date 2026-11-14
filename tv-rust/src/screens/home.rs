@@ -19,6 +19,12 @@ pub struct HomeState {
     pub page: i32,
     pub pagecount: i32,
     pub loading: bool,
+    /// 正在追加下一页（滚动加载）
+    pub loading_more: bool,
+    /// 已经到底（没有下一页或下一页为空）
+    pub no_more: bool,
+    /// 站源下拉框内部的搜索词（不持久化）
+    pub site_filter: String,
 }
 
 impl HomeState {
@@ -33,32 +39,111 @@ impl HomeState {
         self.page = 1;
         self.pagecount = 1;
         self.loading = false;
+        self.loading_more = false;
+        self.no_more = false;
+        self.site_filter.clear();
     }
 }
 
 impl TVApp {
     pub fn ui_home(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("home_sites").show(ctx, |ui| {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("站源").color(TEXT_DIM));
-                ScrollArea::horizontal().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let Some(config) = self.config.clone() else {
-                            ui.label(RichText::new("请先在设置页添加并加载配置").color(TEXT_DIM));
-                            return;
-                        };
-                        for site in &config.sites {
-                            let selected = self.home.site_key.as_deref() == Some(site.key.as_str());
-                            let label = RichText::new(&site.name).color(if selected { ACCENT } else { TEXT });
-                            if ui.add(egui::Button::new(label).fill(if selected { CARD } else { crate::theme::BG_PANEL })).clicked() {
-                                self.select_site(site.clone());
-                            }
-                        }
+                let Some(config) = self.config.clone() else {
+                    ui.label(RichText::new("请先在设置页添加并加载配置").color(TEXT_DIM));
+                    ui.add_space(6.0);
+                    return;
+                };
+
+                ui.label(RichText::new("站源").color(TEXT_DIM).size(13.0));
+
+                let current = self
+                    .home
+                    .site_key
+                    .as_deref()
+                    .and_then(|k| config.sites.iter().find(|s| s.key == k))
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+
+                let mut picked: Option<crate::core::models::Site> = None;
+                let combo_text = if current.is_empty() {
+                    RichText::new("选择站源").color(TEXT_DIM)
+                } else {
+                    RichText::new(current.clone()).color(ACCENT).strong()
+                };
+
+                egui::ComboBox::from_id_salt("site_combo")
+                    .width(240.0)
+                    .selected_text(combo_text)
+                    .show_ui(ui, |ui| {
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.home.site_filter)
+                                .hint_text("搜索站点名称 / key / 类型")
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        let needle = self.home.site_filter.trim().to_lowercase();
+                        let mut shown = 0usize;
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for site in &config.sites {
+                                    if !needle.is_empty() {
+                                        let hay = format!("{} {} {}", site.name, site.key, site.api).to_lowercase();
+                                        if !hay.contains(&needle) {
+                                            continue;
+                                        }
+                                    }
+                                    shown += 1;
+                                    let selected = self.home.site_key.as_deref() == Some(site.key.as_str());
+                                    let text = if selected {
+                                        RichText::new(&site.name).color(ACCENT).strong()
+                                    } else {
+                                        RichText::new(&site.name).color(TEXT)
+                                    };
+                                    let resp = ui.add_sized(
+                                        [ui.available_width(), 28.0],
+                                        egui::Button::selectable(selected, text).frame_when_inactive(false),
+                                    );
+                                    if resp.clicked() {
+                                        picked = Some(site.clone());
+                                        ui.close();
+                                    }
+                                }
+                                if shown == 0 {
+                                    ui.add_space(4.0);
+                                    ui.label(RichText::new("没有匹配的站点").color(TEXT_DIM).size(12.0));
+                                }
+                            });
                     });
+
+                if let Some(site) = picked {
+                    self.home.site_filter.clear();
+                    self.select_site(site);
+                }
+
+                ui.add_space(10.0);
+                if let Some(site) = config.sites.iter().find(|s| Some(s.key.as_str()) == self.home.site_key.as_deref()) {
+                    let kind = site.api.trim_start_matches("csp_").to_string();
+                    if !kind.is_empty() {
+                        ui.label(RichText::new(kind).color(TEXT_DIM).size(12.0));
+                    }
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("{} 个站点", config.sites.len()))
+                            .color(TEXT_DIM)
+                            .size(12.0),
+                    );
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(6.0);
         });
 
         let mut clicked_type: Option<usize> = None;
@@ -131,8 +216,9 @@ impl TVApp {
                 });
                 return;
             }
-            ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                let cell_w = 132.0;
+            let mut want_more = false;
+            ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
+                let cell_w = 150.0;
                 let gap = 10.0;
                 let cols = ((ui.available_width() / (cell_w + gap)).floor() as usize).max(1);
                 let site_key = self.home.site_key.clone().unwrap_or_default();
@@ -141,7 +227,7 @@ impl TVApp {
                     for chunk in chunks {
                         for vod in chunk {
                             ui.vertical(|ui| {
-                                let resp = self.poster_cell(ui, &vod.vod_pic, &vod.vod_name, &vod.vod_remarks, cell_w);
+                                let resp = self.poster_cell(ui, &vod.vod_pic, &vod.vod_name, &vod.vod_remarks, cell_w, &site_key);
                                 if resp.clicked() && !site_key.is_empty() {
                                     self.open_detail(site_key.clone(), vod.vod_id.clone());
                                 }
@@ -150,32 +236,44 @@ impl TVApp {
                         ui.end_row();
                     }
                 });
-                ui.add_space(10.0);
-                self.pagination_bar(ui);
-            });
-        });
-    }
+                ui.add_space(14.0);
+                // 底部状态 + 滚动加载
+                if self.home.selected_type > 0 {
+                    let total = self.home.vods.len();
+                    ui.vertical_centered(|ui| {
+                        if self.home.loading_more {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Spinner::new().size(14.0));
+                                ui.label(RichText::new("加载中…").color(TEXT_DIM));
+                            });
+                        } else if self.home.no_more || self.home.page >= self.home.pagecount {
+                            ui.label(RichText::new(format!("已全部加载 · 共 {total} 部")).color(TEXT_DIM).size(13.0));
+                        } else {
+                            ui.label(RichText::new("继续向下滚动加载更多").color(TEXT_DIM).size(13.0));
+                        }
+                    });
+                    ui.add_space(12.0);
+                }
 
-    fn pagination_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if self.home.loading {
-                ui.add(egui::Spinner::new().size(16.0));
-            }
-            ui.label(
-                RichText::new(format!("第 {} / {} 页", self.home.page.max(1), self.home.pagecount.max(1)))
-                    .color(TEXT_DIM),
-            );
-            let has_more = self.home.page < self.home.pagecount;
-            if ui
-                .add_enabled(has_more && !self.home.loading, egui::Button::new(RichText::new("加载更多").color(if has_more { ACCENT } else { TEXT_DIM })))
-                .clicked()
-            {
+                let has_more = !self.home.no_more && self.home.page < self.home.pagecount;
+                if has_more && !self.home.loading && !self.home.loading_more {
+                    let content_h = ui.min_rect().height();
+                    let near_bottom = viewport.max.y + 280.0 >= content_h;
+                    let scrolled = viewport.min.y > 0.5;
+                    let short_content = content_h <= viewport.height() + 1.0;
+                    if near_bottom && (scrolled || short_content) {
+                        want_more = true;
+                    }
+                }
+            });
+
+            if want_more {
                 self.load_more_category();
             }
         });
     }
 
-    /// 海报单元：图 + 名称 + 备注；返回点击响应
+    /// 海报单元：图 + 名称 + 备注；返回点击响应。site_key 用于取站点 header 拉图。
     pub fn poster_cell(
         &mut self,
         ui: &mut egui::Ui,
@@ -183,9 +281,10 @@ impl TVApp {
         name: &str,
         remarks: &str,
         w: f32,
+        site_key: &str,
     ) -> egui::Response {
         let pic_h = w * 1.42;
-        let text_h = 20.0 + 18.0;
+        let text_h = 24.0 + 20.0;
         let size = Vec2::new(w, pic_h + text_h);
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
         let painter = ui.painter_at(rect);
@@ -195,7 +294,7 @@ impl TVApp {
             painter.rect_filled(pic_rect.expand(2.0), 6.0, ACCENT.gamma_multiply(0.15));
         }
 
-        let tex = if pic.is_empty() { None } else { self.textures.get(pic) };
+        let tex = if pic.is_empty() { None } else { self.poster_texture(pic, site_key) };
         match tex {
             Some(h) => {
                 painter.image(
@@ -221,18 +320,18 @@ impl TVApp {
                 Pos2::new(pic_rect.right() - 4.0, pic_rect.bottom() - 4.0),
                 Align2::RIGHT_BOTTOM,
                 remarks,
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(12.0),
                 Color32::from_rgb(255, 200, 90),
             );
             let _ = badge;
         }
 
-        let name_display = truncate_chars(name, 14);
+        let name_display = truncate_chars(name, 9);
         painter.text(
             Pos2::new(rect.min.x, pic_rect.bottom() + 6.0),
             Align2::LEFT_TOP,
             name_display,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(15.0),
             TEXT,
         );
         resp

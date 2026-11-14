@@ -1,7 +1,7 @@
 //! 历史记录页
 
 use crate::app::TVApp;
-use crate::theme::{ACCENT, TEXT, TEXT_DIM};
+use crate::theme::{TEXT, TEXT_DIM};
 use egui::{RichText, ScrollArea};
 
 impl TVApp {

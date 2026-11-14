@@ -11,6 +11,7 @@ mod theme;
 use egui::ViewportBuilder;
 
 fn main() -> eframe::Result<()> {
+    core::log::init();
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])

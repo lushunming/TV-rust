@@ -21,6 +21,8 @@ pub struct Settings {
     pub search_batch: usize,
     /// 宿主 JVM 最大堆（MB）
     pub host_memory_mb: u32,
+    /// 上次使用的站源 key（重启后恢复，避免总是回到配置里的第一个站）
+    pub last_site_key: Option<String>,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             host_jar: None,
             search_batch: 2,
             host_memory_mb: 1024,
+            last_site_key: None,
         }
     }
 }
@@ -60,7 +63,47 @@ impl Settings {
     }
 }
 
+/// 随包运行时可执行文件名
+fn java_exe_name() -> &'static str {
+    if cfg!(windows) {
+        "java.exe"
+    } else {
+        "java"
+    }
+}
+
+/// 查找随包内置的 jlink 运行时（`<exe目录>/runtime/bin/java`）
+pub fn bundled_java() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let mut candidates = vec![dir.join("runtime").join("bin").join(java_exe_name())];
+    if let Some(parent) = dir.parent() {
+        candidates.push(parent.join("runtime").join("bin").join(java_exe_name()));
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Java 解析顺序：显式配置 → 随包 runtime → JAVA_HOME → PATH 中的 `java`。
+/// 打包形态下用户无需安装 Java；开发形态仍可手动指定 java 路径。
+pub fn resolve_java(configured: &str) -> String {
+    let configured = configured.trim();
+    if !configured.is_empty() && configured != "java" {
+        return configured.to_string();
+    }
+    if let Some(p) = bundled_java() {
+        return p.to_string_lossy().to_string();
+    }
+    if let Ok(home) = std::env::var("JAVA_HOME") {
+        let exe = PathBuf::from(home).join("bin").join(java_exe_name());
+        if exe.is_file() {
+            return exe.to_string_lossy().to_string();
+        }
+    }
+    "java".to_string()
+}
+
 /// 自动探测 spider-host fat jar
+/// 顺序：环境变量 → 可执行文件同级目录（打包形态）→ 工作目录 → 工作目录父目录。
 pub fn autodetect_host_jar() -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("SPIDER_HOST_JAR") {
         let p = PathBuf::from(env_path);
@@ -70,16 +113,20 @@ pub fn autodetect_host_jar() -> Option<PathBuf> {
     }
     const NAME: &str = "spider-host-all.jar";
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("spider-host").join("build").join("libs").join(NAME));
-        candidates.push(cwd.join(NAME));
-        candidates.push(cwd.parent().map(|p| p.join("spider-host").join("build").join("libs").join(NAME)).unwrap_or_default());
-    }
+    // 打包形态优先：jar 与 exe 放在同一目录
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join(NAME));
-            candidates.push(dir.join("spider-host").join("build").join("libs").join(NAME));
-            candidates.push(dir.parent().map(|p| p.join("spider-host").join("build").join("libs").join(NAME)).unwrap_or_default());
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join(NAME));
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("spider-host").join("build").join("libs").join(NAME));
+        candidates.push(cwd.join(NAME));
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("spider-host").join("build").join("libs").join(NAME));
         }
     }
     candidates.into_iter().find(|p| p.is_file())

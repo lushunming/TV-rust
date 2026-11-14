@@ -33,9 +33,17 @@ object Utils {
     fun md5(str: String): String {
         try {
             if (StringUtils.isBlank(str)) return ""
+            return md5(str.toByteArray(Charsets.UTF_8))
+        } catch (e: Exception) {
+            return ""
+        }
+    }
+
+    /** 内容 md5（小写十六进制），用于校验下载的 jar */
+    fun md5(bytes: ByteArray): String {
+        try {
             val digest = MessageDigest.getInstance("MD5")
-            val bytes = digest.digest(str.toByteArray())
-            val bigInteger = BigInteger(1, bytes)
+            val bigInteger = BigInteger(1, digest.digest(bytes))
             val stringBuilder = StringBuilder(bigInteger.toString(16))
             while (stringBuilder.length < 32) stringBuilder.insert(0, "0")
             return stringBuilder.toString().lowercase()

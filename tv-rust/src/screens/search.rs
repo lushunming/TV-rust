@@ -2,7 +2,7 @@
 
 use crate::app::TVApp;
 use crate::core::models::Vod;
-use crate::theme::{ACCENT, TEXT, TEXT_DIM};
+use crate::theme::{ACCENT, TEXT_DIM};
 use egui::{RichText, ScrollArea};
 
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ impl TVApp {
                 return;
             }
             ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                let cell_w = 132.0;
+                let cell_w = 150.0;
                 let gap = 10.0;
                 let cols = ((ui.available_width() / (cell_w + gap)).floor() as usize).max(1);
                 let chunks: Vec<&[SearchHit]> = hits.chunks(cols).collect();
@@ -84,7 +84,7 @@ impl TVApp {
                     for chunk in chunks {
                         for hit in chunk {
                             ui.vertical(|ui| {
-                                let resp = self.poster_cell(ui, &hit.vod.vod_pic, &hit.vod.vod_name, &hit.vod.vod_remarks, cell_w);
+                                let resp = self.poster_cell(ui, &hit.vod.vod_pic, &hit.vod.vod_name, &hit.vod.vod_remarks, cell_w, &hit.site_key);
                                 if resp.clicked() {
                                     let (sk, vid) = (hit.site_key.clone(), hit.vod.vod_id.clone());
                                     self.open_detail(sk, vid);

@@ -1,5 +1,6 @@
 package com.corner.host
 
+import com.corner.catvodcore.util.Http
 import com.corner.catvodcore.util.Jsons
 import com.corner.catvodcore.util.Urls
 import com.corner.catvod.enum.bean.Site
@@ -32,6 +33,10 @@ object Host {
 
     @Volatile
     private var cfgId: String = ""
+
+    /** 最近一次 setRecent 的站点 key：/proxy 回退到实例方法 proxyLocal 时使用 */
+    @Volatile
+    private var recentSiteKey: String = ""
 
     /**
      * 解析配置 JSON（与 ApiConfig.parseConfig 对应的宿主侧实现）。
@@ -81,9 +86,40 @@ object Host {
 
     fun getSite(key: String): Site? = sites[key]
 
+    fun siteCount(): Int = sites.size
+
+    fun configId(): String = cfgId
+
+    /**
+     * /proxy 端点的实际转发入口。
+     * 优先走 jar 的静态 proxy(Map) 方法（FongMi 标准），失败时回退到最近站点的 proxyLocal 实例方法，
+     * 兼容只实现其中一种的爬虫。
+     */
+    fun proxyHandle(params: Map<String, String?>): Array<Any>? {
+        val flat = HashMap<String, String>()
+        params.forEach { (k, v) -> if (k != null && v != null) flat[k] = v }
+        runCatching { JarLoader.proxyInvoke(flat) }.getOrNull()?.let { if (it.isNotEmpty()) return it }
+        val site = sites[recentSiteKey] ?: return null
+        val map = HashMap<String?, String?>(params)
+        return runCatching { getSpider(site).proxyLocal(map) }.getOrNull()
+    }
+
     private fun getSpider(site: Site): Spider {
         val csp: Boolean = site.api.startsWith("csp_")
         return if (csp) JarLoader.getSpider(site.key, site.api, site.ext, site.jar ?: "") else Spider()
+    }
+
+    /** Spider 返回的 JSON 字符串；若该站点 init 曾失败，附带 warning 字段供前端提示 */
+    private fun spiderJson(site: Site, json: String): JsonElement {
+        val warn = JarLoader.initWarning(site.key)
+        return if (warn == null) {
+            JsonPrimitive(json)
+        } else {
+            buildJsonObject {
+                put("data", JsonPrimitive(json))
+                put("warning", JsonPrimitive(warn))
+            }
+        }
     }
 
     private fun requireSite(siteKey: String): Site {
@@ -113,12 +149,11 @@ object Host {
 
             "homeContent" -> {
                 val site = requireSite(params.str("siteKey"))
-                JsonPrimitive(getSpider(site).homeContent(params.bool("filter")))
-            }
+                spiderJson(site, getSpider(site).homeContent(params.bool("filter")))            }
 
             "homeVideoContent" -> {
                 val site = requireSite(params.str("siteKey"))
-                JsonPrimitive(getSpider(site).homeVideoContent())
+                spiderJson(site, getSpider(site).homeVideoContent())
             }
 
             "categoryContent" -> {
@@ -127,19 +162,22 @@ object Host {
                 (params["extend"] as? JsonObject)?.forEach { (k, v) ->
                     extend[k] = (v as? JsonPrimitive)?.content ?: ""
                 }
-                JsonPrimitive(getSpider(site).categoryContent(params.str("tid"), params.str("pg"), params.bool("filter"), extend))
+                spiderJson(
+                    site,
+                    getSpider(site).categoryContent(params.str("tid"), params.str("pg"), params.bool("filter"), extend)
+                )
             }
 
             "detailContent" -> {
                 val site = requireSite(params.str("siteKey"))
                 val ids = (params["ids"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content } ?: emptyList()
-                JsonPrimitive(getSpider(site).detailContent(ids))
+                spiderJson(site, getSpider(site).detailContent(ids))
             }
 
             "searchContent" -> {
                 val site = requireSite(params.str("siteKey"))
                 val pg = params.str("pg").ifBlank { "1" }
-                JsonPrimitive(getSpider(site).searchContent(params.str("key"), params.bool("quick"), pg))
+                spiderJson(site, getSpider(site).searchContent(params.str("key"), params.bool("quick"), pg))
             }
 
             "playerContent" -> {
@@ -150,7 +188,21 @@ object Host {
 
             "setRecent" -> {
                 val site = requireSite(params.str("siteKey"))
+                recentSiteKey = site.key
                 JarLoader.SetRecent(site.jar)
+                null
+            }
+
+            "serverInfo" -> buildJsonObject {
+                put("proxyPort", ProxyServer.port)
+                put("proxyBase", ProxyServer.baseUrl)
+                put("sites", sites.size)
+                put("cfgId", cfgId)
+            }
+
+            "setProxy" -> {
+                // 出站代理（对应 ApiConfig.initProxy / rules.proxy），空串表示清除
+                Http.setProxy(params.str("proxy"))
                 null
             }
 
@@ -186,6 +238,7 @@ object Host {
             "clearCache" -> {
                 JarLoader.clear()
                 sites.clear()
+                recentSiteKey = ""
                 null
             }
 

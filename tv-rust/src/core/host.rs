@@ -28,6 +28,8 @@ pub struct SpiderHost {
     pending: Arc<Mutex<HashMap<u64, SyncSender<HostResp>>>>,
     alive: Arc<AtomicBool>,
     pub hello: Arc<Mutex<Option<String>>>,
+    /// 宿主内置代理服务地址（hello 中下发），如 http://127.0.0.1:9978
+    proxy_base: Arc<Mutex<Option<String>>>,
 }
 
 impl SpiderHost {
@@ -38,7 +40,9 @@ impl SpiderHost {
             cmd.arg(a);
         }
         cmd.arg("-jar").arg(jar);
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        // 宿主日志写 stderr。打包版是无控制台的 GUI 程序，inherit 会让日志全部丢失，
+        // 因此改为管道读取并落盘到 %AppData%\TV-Multiplatform\cache\rust\spider-host.log
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -49,15 +53,50 @@ impl SpiderHost {
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
 
+        // 宿主 stderr -> 本地日志文件（同时记录 spawn 命令便于复现）
+        crate::core::log::info(format!("spider-host spawn: {} {} -jar {}", java, jvm_args.join(" "), jar));
+        if let Some(stderr) = child.stderr.take() {
+            std::thread::Builder::new()
+                .name("spider-host-stderr".into())
+                .spawn(move || {
+                    let mut file = crate::core::log::open_host_log();
+                    let mut reader = BufReader::new(stderr);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {
+                                let text = line.trim_end();
+                                if text.is_empty() {
+                                    continue;
+                                }
+                                if let Some(f) = file.as_mut() {
+                                    let _ = writeln!(f, "{}", text);
+                                    let _ = f.flush();
+                                }
+                                if cfg!(debug_assertions) {
+                                    eprintln!("[host] {}", text);
+                                }
+                            }
+                        }
+                    }
+                    crate::core::log::warn("spider-host stderr 流已结束（进程退出或崩溃）");
+                })
+                .ok();
+        }
+
         let pending: Arc<Mutex<HashMap<u64, SyncSender<HostResp>>>> = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let hello = Arc::new(Mutex::new(None));
+        let proxy_base = Arc::new(Mutex::new(None));
 
         // 读取线程
         {
             let pending = Arc::clone(&pending);
             let alive = Arc::clone(&alive);
             let hello = Arc::clone(&hello);
+            let proxy_base = Arc::clone(&proxy_base);
             std::thread::Builder::new()
                 .name("spider-host-reader".into())
                 .spawn(move || {
@@ -87,6 +126,11 @@ impl SpiderHost {
                                 v.get("java").and_then(|x| x.as_str()).unwrap_or("?")
                             );
                             *hello.lock().unwrap() = Some(info);
+                            if let Some(p) = v.get("proxy").and_then(|x| x.as_str()) {
+                                if !p.is_empty() {
+                                    *proxy_base.lock().unwrap() = Some(p.to_string());
+                                }
+                            }
                             continue;
                         }
                         let resp = HostResp {
@@ -119,6 +163,7 @@ impl SpiderHost {
             pending,
             alive,
             hello,
+            proxy_base,
         }))
     }
 
@@ -128,6 +173,11 @@ impl SpiderHost {
 
     pub fn hello(&self) -> Option<String> {
         self.hello.lock().unwrap().clone()
+    }
+
+    /// 宿主内置代理服务根地址（如 http://127.0.0.1:9978），未就绪时返回 None
+    pub fn proxy_base(&self) -> Option<String> {
+        self.proxy_base.lock().unwrap().clone()
     }
 
     /// 阻塞请求（请在工作线程调用，不要在 UI 线程调用）
@@ -179,6 +229,20 @@ impl SpiderHost {
                     return Ok(crate::core::models::SpiderResult::default());
                 }
                 crate::core::models::SpiderResult::from_raw(&s)
+            }
+            // 站点 init 失败时宿主返回 {data: "<json>", warning: "..."}
+            Value::Object(map) => {
+                let warning = map.get("warning").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let data = map.get("data").cloned().unwrap_or(Value::Null);
+                let mut result = match data {
+                    Value::String(s) if !s.trim().is_empty() => {
+                        crate::core::models::SpiderResult::from_raw(&s)?
+                    }
+                    Value::Null => crate::core::models::SpiderResult::default(),
+                    other => crate::core::models::SpiderResult::from_raw(&other.to_string())?,
+                };
+                result.warning = warning;
+                Ok(result)
             }
             Value::Null => Ok(crate::core::models::SpiderResult::default()),
             other => crate::core::models::SpiderResult::from_raw(&other.to_string()),

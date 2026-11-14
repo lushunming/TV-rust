@@ -1,6 +1,7 @@
 pub mod config;
 pub mod history;
 pub mod host;
+pub mod log;
 pub mod models;
 pub mod paths;
 pub mod player;

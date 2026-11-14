@@ -85,8 +85,17 @@ pub fn setup(ctx: &egui::Context) {
     style.visuals.widgets.hovered.corner_radius = r;
     style.visuals.widgets.active.corner_radius = r;
     style.visuals.widgets.open.corner_radius = r;
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    // 整体字号调大（内置默认 12.5/10 对中文偏小）
+    style.text_styles = [
+        (egui::TextStyle::Heading, egui::FontId::proportional(22.0)),
+        (egui::TextStyle::Body, egui::FontId::proportional(16.0)),
+        (egui::TextStyle::Button, egui::FontId::proportional(15.0)),
+        (egui::TextStyle::Small, egui::FontId::proportional(13.0)),
+        (egui::TextStyle::Monospace, egui::FontId::monospace(14.0)),
+    ]
+    .into();
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.set_style_of(egui::Theme::Dark, style.clone());
     ctx.set_style_of(egui::Theme::Light, style);

@@ -60,6 +60,8 @@ pub struct TVApp {
     pub settings: Settings,
     pub host: Option<Arc<SpiderHost>>,
     pub host_status: HostStatus,
+    /// 宿主内置代理服务根地址（hello 下发），用于重写 127.0.0.1:9978 的本地 URL
+    pub proxy_base: Option<String>,
     pub config: Option<RawApiConfig>,
     pub cfg_id: String,
 
@@ -77,6 +79,8 @@ pub struct TVApp {
 
     pub textures: TextureCache,
     pub toast: Option<(String, Instant)>,
+    /// 已提示过 init 告警的站点，避免每次刷新都弹同一条
+    pub warned_sites: std::collections::HashSet<String>,
 }
 
 impl TVApp {
@@ -94,6 +98,7 @@ impl TVApp {
             settings,
             host: None,
             host_status: HostStatus::Starting,
+            proxy_base: None,
             config: None,
             cfg_id: String::new(),
             event_tx: tx,
@@ -106,6 +111,7 @@ impl TVApp {
             history_store: HistoryStore::load(),
             textures: TextureCache::new(),
             toast: None,
+            warned_sites: std::collections::HashSet::new(),
         };
         // settings_page 已在上面初始化，重新同步编辑框
         app.settings_page.player_path_edit = app.settings.player_path.clone();
@@ -126,21 +132,28 @@ impl TVApp {
             .or_else(|| crate::core::settings::autodetect_host_jar().map(|p| p.to_string_lossy().to_string()));
         let Some(jar) = jar else {
             self.host_status = HostStatus::Failed(
-                "未找到 spider-host-all.jar。请先运行 gradlew :spider-host:fatJar，或在设置页填写 jar 路径。".into(),
+                "未找到 spider-host-all.jar。打包版请确认 jar 与 exe 同目录；开发版请运行 gradlew :spider-host:fatJar，或在设置页填写 jar 路径。".into(),
             );
             return;
         };
         self.host_status = HostStatus::Starting;
         let jvm_arg = format!("-Xmx{}m", self.settings.host_memory_mb);
-        match SpiderHost::spawn(&self.settings.java_path, &jar, &[jvm_arg]) {
+        let java = crate::core::settings::resolve_java(&self.settings.java_path);
+        crate::core::log::info(format!(
+            "starting host: java={} jar={} heap={}m",
+            java, jar, self.settings.host_memory_mb
+        ));
+        match SpiderHost::spawn(&java, &jar, &[jvm_arg]) {
             Ok(h) => {
                 self.host = Some(h);
+                crate::core::log::info("spider-host 进程已创建，等待 hello");
                 // hello 异步到达，由 check_host 提升为 Ready
                 if self.settings.active_source().is_some() {
                     self.request_load_config();
                 }
             }
             Err(e) => {
+                crate::core::log::error(format!("启动宿主失败: {e:#}"));
                 self.host_status = HostStatus::Failed(format!("{e:#}"));
             }
         }
@@ -158,12 +171,15 @@ impl TVApp {
         if starting {
             if let Some(h) = &self.host {
                 if let Some(info) = h.hello() {
+                    crate::core::log::info(format!("host ready: {}", info.trim()));
                     self.host_status = HostStatus::Ready(info);
+                    self.proxy_base = h.proxy_base();
                 }
             }
         }
         let dead = self.host.as_ref().map(|h| !h.is_alive()).unwrap_or(false);
         if dead && !matches!(self.host_status, HostStatus::Failed(_)) {
+            crate::core::log::error("宿主进程已退出（详见 spider-host.log）");
             self.host_status = HostStatus::Failed("宿主进程已退出".into());
             self.host = None;
         }
@@ -181,10 +197,11 @@ impl TVApp {
             return;
         };
         let tx = self.event_tx.clone();
+        crate::core::log::info(format!("loading config from {}", src));
         self.home.reset();
         self.toast("正在加载配置…");
         std::thread::spawn(move || {
-            let res: anyhow::Result<(RawApiConfig, String)> = (|| {
+            let res: anyhow::Result<(RawApiConfig, String, crate::core::config::JarPrefetch)> = (|| {
                 let raw = crate::core::config::fetch_config(&src)?;
                 let cfg_id = crate::core::config::md5_hex(&raw);
                 let url = match crate::core::config::classify(&src) {
@@ -193,7 +210,7 @@ impl TVApp {
                 };
                 let normalized = host.request(
                     "loadConfig",
-                    json!({"data": raw, "url": url, "cfgId": cfg_id}),
+                    json!({"data": raw, "url": url.clone(), "cfgId": cfg_id}),
                     Duration::from_secs(60),
                 )?;
                 let norm_str = match normalized {
@@ -201,11 +218,21 @@ impl TVApp {
                     o => o.to_string(),
                 };
                 let cfg: RawApiConfig = serde_json::from_str(&norm_str)?;
-                Ok((cfg, cfg_id))
+                // 宿主 JVM 侧下载 jar 可能被服务端 TLS 指纹拒绝（handshake_failure），
+                // 先用 Rust 的 TLS 栈把 jar 写入宿主缓存目录，保证 csp_ 站点有数据。
+                let report = crate::core::config::prefetch_spider_jars(&url, &cfg);
+                Ok((cfg, cfg_id, report))
             })();
             match res {
-                Ok((cfg, id)) => {
+                Ok((cfg, id, report)) => {
                     let _ = tx.send(AppEvent::ConfigReady(cfg, id));
+                    if !report.failed.is_empty() {
+                        let _ = tx.send(AppEvent::Toast(format!(
+                            "爬虫 jar 预取失败 {} 个，相关站点可能无数据：{}",
+                            report.failed.len(),
+                            report.failed[0]
+                        )));
+                    }
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::ConfigError(format!("{e:#}")));
@@ -217,9 +244,15 @@ impl TVApp {
     // ---------- 首页 ----------
 
     pub fn select_site(&mut self, site: crate::core::models::Site) {
+        crate::core::log::info(format!("select site: {} ({})", site.name, site.key));
         self.home.reset();
         self.home.site_key = Some(site.key.clone());
         self.home.site_name = site.name.clone();
+        // 记住上次使用的站源：重启后直接恢复，而不是回到配置里第一个（往往是网盘/索引站）
+        if self.settings.last_site_key.as_deref() != Some(site.key.as_str()) {
+            self.settings.last_site_key = Some(site.key.clone());
+            self.settings.save();
+        }
         self.home.loading = true;
         let Some(host) = self.host.clone() else {
             self.home.loading = false;
@@ -261,6 +294,8 @@ impl TVApp {
         if idx == 0 {
             // 推荐
             self.home.loading = true;
+            self.home.loading_more = false;
+            self.home.no_more = false;
             self.home.vods.clear();
             self.home.page = 1;
             self.home.pagecount = 1;
@@ -290,6 +325,8 @@ impl TVApp {
             }
         }
         self.home.loading = true;
+        self.home.loading_more = false;
+        self.home.no_more = false;
         self.home.vods.clear();
         self.home.page = 1;
         std::thread::spawn(move || {
@@ -313,6 +350,9 @@ impl TVApp {
         if self.home.selected_type == 0 {
             return; // 推荐流无分页
         }
+        if self.home.loading || self.home.loading_more || self.home.no_more {
+            return; // 已在加载或已到底，避免滚动时重复触发
+        }
         let Some(site_key) = self.home.site_key.clone() else { return };
         let Some(host) = self.host.clone() else { return };
         let Some(t) = self.home.types.get(self.home.selected_type) else { return };
@@ -327,7 +367,7 @@ impl TVApp {
             }
         }
         let next = self.home.page + 1;
-        self.home.loading = true;
+        self.home.loading_more = true;
         let tx = self.event_tx.clone();
         std::thread::spawn(move || {
             match host.request_spider_result(
@@ -511,8 +551,65 @@ impl TVApp {
 
     // ---------- 通用 ----------
 
+    /// 把爬虫硬编码的本地代理地址（127.0.0.1:9978）重写为宿主实际监听地址。
+    /// 端口无冲突时不发生任何改动。
+    pub fn localize_url(&self, url: &str) -> String {
+        let Some(base) = &self.proxy_base else {
+            return url.to_string();
+        };
+        let mut out = url.to_string();
+        for host in ["127.0.0.1:9978", "localhost:9978"] {
+            if out.contains(host) {
+                out = out
+                    .replace(&format!("http://{host}"), base)
+                    .replace(&format!("https://{host}"), base);
+            }
+        }
+        out
+    }
+
+    /// 站点 header（图片、播放地址复用），来自配置里的 site.header
+    pub fn site_headers(&self, site_key: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(site) = self.config.as_ref().and_then(|c| c.sites.iter().find(|s| s.key == site_key)) {
+            if let Some(h) = &site.header {
+                out.extend(h.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        out
+    }
+
+    /// 海报纹理：自动带上站点 header，并重写本地代理 URL
+    pub fn poster_texture(&mut self, pic: &str, site_key: &str) -> Option<egui::TextureHandle> {
+        if pic.is_empty() {
+            return None;
+        }
+        let url = self.localize_url(pic);
+        let headers = self.site_headers(site_key);
+        self.textures.get_with_headers(&url, &headers)
+    }
+
+    /// 站点 init 告警：每个站点只提示一次（仍会完整写入日志）
+    fn note_site_warning(&mut self, warning: Option<String>) {
+        let Some(w) = warning else { return };
+        let key = self.home.site_key.clone().unwrap_or_default();
+        let name = self.home.site_name.clone();
+        crate::core::log::warn(format!("site warning {}: {}", key, w));
+        if !key.is_empty() && !self.warned_sites.insert(key) {
+            return;
+        }
+        self.toast(format!("{} 部分功能不可用：{}", name, w));
+    }
+
     pub fn toast<S: Into<String>>(&mut self, msg: S) {
-        self.toast = Some((msg.into(), Instant::now()));
+        let text = msg.into();
+        // 所有用户可见提示都落盘：抓不到问题的时候可以直接 grep 日志
+        if text.contains("失败") || text.contains("无法") || text.contains("异常") || text.contains("错误") {
+            crate::core::log::warn(format!("toast: {text}"));
+        } else {
+            crate::core::log::info(format!("toast: {text}"));
+        }
+        self.toast = Some((text, Instant::now()));
     }
 
     fn process_events(&mut self) {
@@ -520,39 +617,105 @@ impl TVApp {
             match ev {
                 AppEvent::ConfigReady(cfg, id) => {
                     let n = cfg.sites.len();
+                    crate::core::log::info(format!("config ready: cfgId={} sites={}", id, n));
                     self.config = Some(cfg);
                     self.cfg_id = id;
                     self.toast(format!("配置加载完成，{} 个站点", n));
                     self.home.reset();
-                    if let Some(first) = self.config.as_ref().and_then(|c| c.sites.first().cloned()) {
-                        self.select_site(first);
+                    let preferred = self.settings.last_site_key.clone().and_then(|k| {
+                        self.config.as_ref().and_then(|c| c.sites.iter().find(|s| s.key == k).cloned())
+                    });
+                    let site = preferred.or_else(|| self.config.as_ref().and_then(|c| c.sites.first().cloned()));
+                    if let Some(site) = site {
+                        self.select_site(site);
                     }
                 }
                 AppEvent::ConfigError(e) => {
+                    crate::core::log::error(format!("config error: {e}"));
                     self.toast(format!("配置加载失败: {}", e));
                 }
                 AppEvent::HomeTypes(r) => {
+                    let warn = r.warning.clone();
+                    self.note_site_warning(warn);
+                    // homeContent 不仅给分类，通常还带着一批推荐内容（Wogg 255 条、SeedHub 20 条）；
+                    // 以前只取 class 把 list 丢掉，首页只能退回 homeVideoContent，而很多爬虫该接口返回空 → 看起来“没视频”
+                    let recommended = r.list.clone();
+                    crate::core::log::info(format!(
+                        "home recommended: {} items, {} types, site={}",
+                        recommended.len(),
+                        r.types.len(),
+                        self.home.site_name
+                    ));
+                    if !recommended.is_empty() {
+                        self.home.vods = recommended;
+                        self.home.page = 1;
+                        self.home.pagecount = r.pagecount.unwrap_or(1).max(1);
+                        self.home.loading = false;
+                    }
                     let mut types = vec![Type { type_id: "home".into(), type_name: "推荐".into() }];
                     types.extend(r.types.clone());
                     self.home.types = types;
                     self.home.filters = r.filters.clone();
                     self.home.selected_type = 0;
+                    // 应用筛选默认值（Filter.init）：首屏展示的选中状态必须与后端实际使用的参数一致
+                    self.home.choice.clear();
+                    for group in self.home.filters.values() {
+                        for f in group {
+                            if let Some(key) = &f.key {
+                                if !f.init.trim().is_empty() {
+                                    self.home.choice.insert(key.clone(), f.init.clone());
+                                }
+                            }
+                        }
+                    }
                 }
                 AppEvent::HomeVideos(r) => {
-                    self.home.vods = r.list.clone();
-                    self.home.page = 1;
-                    self.home.pagecount = r.pagecount.unwrap_or(1).max(1);
+                    let warn = r.warning.clone();
+                    self.note_site_warning(warn);
+                    crate::core::log::info(format!(
+                        "home videos: {} site={} pagecount={:?}",
+                        r.list.len(),
+                        self.home.site_name,
+                        r.pagecount
+                    ));
+                    // homeVideoContent 为空时不要清掉 homeContent 带来的推荐列表
+                    if !r.list.is_empty() || self.home.vods.is_empty() {
+                        self.home.vods = r.list.clone();
+                        self.home.page = 1;
+                        self.home.pagecount = r.pagecount.unwrap_or(1).max(1);
+                    }
+                    crate::core::log::info(format!("home grid after homeVideoContent: {} items", self.home.vods.len()));
                     self.home.loading = false;
                 }
                 AppEvent::CategoryPage { page, result } => {
+                    crate::core::log::info(format!(
+                        "category page: p{} items={} site={}",
+                        page,
+                        result.list.len(),
+                        self.home.site_name
+                    ));
                     if page <= 1 {
                         self.home.vods = result.list.clone();
+                        self.home.no_more = false;
+                    } else if result.list.is_empty() {
+                        // 下一页为空：视为已到末尾，避免滚动加载反复请求同一页
+                        self.home.no_more = true;
                     } else {
                         self.home.vods.extend(result.list.clone());
                     }
                     self.home.page = page.max(1);
-                    self.home.pagecount = result.pagecount.unwrap_or(page).max(self.home.page);
+                    // 站点未上报 pagecount 时不要直接当作到底：
+                    // 有内容就假定还有下一页，靠"下一页为空"来结束（否则永远无法滚动加载）
+                    let reported = result.pagecount.unwrap_or(0);
+                    self.home.pagecount = if reported > 0 {
+                        reported.max(self.home.page)
+                    } else if result.list.is_empty() {
+                        self.home.page
+                    } else {
+                        self.home.page + 1
+                    };
                     self.home.loading = false;
+                    self.home.loading_more = false;
                 }
                 AppEvent::SearchSiteResult { site_key, site_name, vods, error } => {
                     self.search.pending = self.search.pending.saturating_sub(1);
@@ -588,11 +751,13 @@ impl TVApp {
                     }
                 }
                 AppEvent::DetailError(e) => {
+                    crate::core::log::warn(format!("detail error: {e}"));
                     self.detail.loading = false;
                     self.detail.error = Some(e);
                 }
                 AppEvent::PlayReady { url, headers, site_key, vod_id, vod_name, vod_pic, flag, ep_url, ep_name } => {
                     self.detail.playing = false;
+                    let url = self.localize_url(&url);
                     let player_path = {
                         let configured = self.settings.player_path.trim().to_string();
                         if configured.is_empty() {
@@ -624,6 +789,7 @@ impl TVApp {
                     }
                 }
                 AppEvent::PlayError(e) => {
+                    crate::core::log::warn(format!("play error: {e}"));
                     self.detail.playing = false;
                     self.toast(e);
                 }

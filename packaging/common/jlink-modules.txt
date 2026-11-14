@@ -1,0 +1,25 @@
+# jlink 运行时模块清单（三平台共用，唯一来源）
+# 由 packaging/package-*.{ps1,sh} 读取；每行一个模块，# 开头为注释。
+#
+# 注意：以下两个模块缺一不可，曾有血泪教训——
+#   jdk.crypto.ec  ECDHE 密钥交换；缺了所有 HTTPS 请求静默失败（爬虫 init 报 Not a JSON Object）
+#   jdk.charsets   GBK/GB2312 解码；缺了中文站点响应乱码或解析失败
+java.base
+java.compiler
+java.desktop
+java.instrument
+java.management
+java.naming
+java.net.http
+java.scripting
+java.security.jgss
+java.sql
+jdk.httpserver
+jdk.unsupported
+jdk.crypto.ec
+jdk.charsets
+jdk.zipfs
+jdk.naming.dns
+jdk.security.auth
+jdk.unsupported.desktop
+jdk.net

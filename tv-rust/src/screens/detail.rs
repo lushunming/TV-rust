@@ -162,7 +162,8 @@ impl TVApp {
         let h = w * 1.42;
         let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        let tex = if pic.is_empty() { None } else { self.textures.get(pic) };
+        let site_key = self.detail.site_key.clone();
+        let tex = if pic.is_empty() { None } else { self.poster_texture(pic, &site_key) };
         match tex {
             Some(t) => {
                 painter.image(

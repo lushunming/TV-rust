@@ -152,6 +152,30 @@ impl TVApp {
                 ui.add_space(14.0);
                 ui.separator();
 
+                // ---------- 诊断日志 ----------
+                ui.heading(RichText::new("诊断日志").color(TEXT));
+                ui.label(
+                    RichText::new("遇到问题时先把日志发出来：程序日志、宿主日志、播放器输出都在缓存目录下。")
+                        .color(TEXT_DIM).size(12.0),
+                );
+                let log_dir = crate::core::paths::rust_data();
+                ui.label(
+                    RichText::new(format!("目录: {}", log_dir.display()))
+                        .color(TEXT_DIM).size(11.0),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("打开日志目录").clicked() {
+                        open_path(&log_dir);
+                    }
+                    let player_log = crate::core::paths::player_log();
+                    if ui.button("打开 playerLog").clicked() {
+                        open_path(&player_log);
+                    }
+                });
+
+                ui.add_space(14.0);
+                ui.separator();
+
                 // ---------- 保存 ----------
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("保存设置").color(ACCENT)).clicked() {
@@ -173,5 +197,21 @@ fn trunc(s: &str, max: usize) -> String {
     } else {
         let t: String = s.chars().take(max).collect();
         format!("{}…", t)
+    }
+}
+
+/// 在资源管理器中打开目录（或文件的默认打开方式）
+fn open_path(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     }
 }

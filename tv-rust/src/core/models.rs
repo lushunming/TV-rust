@@ -25,6 +25,26 @@ where
     Ok(value_to_string(&v).unwrap_or_default())
 }
 
+/// 有些站点把数字写成字符串（如 "pagecount": "0"），不能因此整页失败
+fn de_opt_i32<'de, D>(d: D) -> Result<Option<i32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Jv::deserialize(d)? {
+        Jv::Null => Ok(None),
+        Jv::Bool(b) => Ok(Some(if b { 1 } else { 0 })),
+        Jv::Number(n) => Ok(n.as_i64().map(|x| x as i32).or_else(|| n.as_f64().map(|x| x as i32))),
+        Jv::String(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            Ok(t.parse::<i64>().ok().map(|x| x as i32).or_else(|| t.parse::<f64>().ok().map(|x| x as i32)))
+        }
+        Jv::Array(_) | Jv::Object(_) => Ok(None),
+    }
+}
+
 fn de_lenient_opt_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -91,6 +111,8 @@ impl Site {
     pub fn is_searchable(&self) -> bool {
         self.searchable == Some(1)
     }
+    /// 站点是否支持切换（协议字段，Rust 侧暂未使用）
+    #[allow(dead_code)]
     pub fn is_changeable(&self) -> bool {
         self.changeable == Some(1)
     }
@@ -172,6 +194,8 @@ pub struct Vod {
 
 #[derive(Debug, Clone, Default)]
 pub struct UrlValue {
+    /// 名称（协议字段，UI 未使用；播放只取地址）
+    #[allow(dead_code)]
     pub n: String,
     pub v: String,
 }
@@ -189,6 +213,8 @@ impl Url {
             .map(|x| x.v.clone())
             .unwrap_or_default()
     }
+    /// 是否所有候选地址都为空（保留给播放前的兜底校验）
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.values.iter().all(|x| x.v.is_empty())
     }
@@ -247,21 +273,51 @@ pub struct SpiderResult {
     pub header: Option<HashMap<String, String>>,
     #[serde(rename = "playUrl", deserialize_with = "de_lenient_string")]
     pub play_url: String,
+    #[serde(default, deserialize_with = "de_opt_i32")]
     pub parse: Option<i32>,
+    #[serde(default, deserialize_with = "de_opt_i32")]
     pub jx: Option<i32>,
     #[serde(deserialize_with = "de_lenient_string")]
     pub flag: String,
     #[serde(deserialize_with = "de_url")]
     pub url: Url,
+    #[serde(default, deserialize_with = "de_opt_i32")]
     pub pagecount: Option<i32>,
+    #[serde(default, deserialize_with = "de_opt_i32")]
     pub code: Option<i32>,
     #[serde(deserialize_with = "de_lenient_string")]
     pub msg: String,
+    /// 宿主回传的站点告警（如 spider.init 失败但列表仍可用）
+    pub warning: Option<String>,
 }
 
 impl SpiderResult {
     pub fn from_raw(raw: &str) -> anyhow::Result<SpiderResult> {
         Ok(serde_json::from_str(raw.trim())?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpiderResult;
+
+    #[test]
+    fn accepts_string_numbers() {
+        // Qupans 等站点会把数字写成字符串，不能因此整页失败
+        let raw = r#"{"pagecount":"3","code":"0","parse":"1","jx":0,"list":[]}"#;
+        let r = SpiderResult::from_raw(raw).expect("parse failed");
+        assert_eq!(r.pagecount, Some(3));
+        assert_eq!(r.code, Some(0));
+        assert_eq!(r.parse, Some(1));
+        assert_eq!(r.jx, Some(0));
+    }
+
+    #[test]
+    fn tolerates_empty_and_null_numbers() {
+        let raw = r#"{"pagecount":"","code":null,"list":[]}"#;
+        let r = SpiderResult::from_raw(raw).expect("parse failed");
+        assert_eq!(r.pagecount, None);
+        assert_eq!(r.code, None);
     }
 }
 

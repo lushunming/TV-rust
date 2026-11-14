@@ -20,7 +20,8 @@ fn shared_cache(name: &str) -> PathBuf {
     data_root().join("cache").join(name)
 }
 
-/// 爬虫 jar 缓存目录（与 Kotlin Paths.jar() 相同）
+/// 爬虫 jar 缓存目录（与 Kotlin Paths.jar() 相同；宿主自行维护，Rust 侧只保留约定）
+#[allow(dead_code)]
 pub fn jar_cache() -> PathBuf {
     shared_cache("jar")
 }

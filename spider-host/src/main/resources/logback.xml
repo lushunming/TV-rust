@@ -8,8 +8,26 @@
             <charset>UTF-8</charset>
         </encoder>
     </appender>
+
+    <!-- 同时落盘：打包版是无控制台的 GUI 程序，stderr 会被丢弃。
+         目录由 Main 设置的系统属性 tv.log.dir 决定（%AppData%\TV-Multiplatform\cache\log） -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${tv.log.dir:-${java.io.tmpdir}}/spider-host.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${tv.log.dir:-${java.io.tmpdir}}/spider-host.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>5</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{28} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
     <root level="INFO">
         <appender-ref ref="STDERR"/>
+        <appender-ref ref="FILE"/>
     </root>
     <logger name="com.github.catvod" level="DEBUG"/>
 </configuration>

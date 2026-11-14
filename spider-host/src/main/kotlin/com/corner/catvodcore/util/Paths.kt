@@ -11,11 +11,20 @@ object Paths {
 
     private val userDataDir: File by lazy {
         val os = System.getProperty("os.name").orEmpty().lowercase()
-        when {
-            os.contains("win") -> File(System.getenv("AppData"), "$ApplicationName/cache")
+        val dir = when {
+            os.contains("win") -> {
+                // 某些启动方式（精简环境/服务/子进程）没有 AppData 环境变量。
+                // 此时绝不能回退到相对路径：否则缓存目录会跟着工作目录跑，
+                // jar 缓存永远命中不了，所有依赖 jar 的站点都会因下载失败而无数据。
+                val roaming = System.getenv("AppData")
+                    ?: File(System.getProperty("user.home"), "AppData").resolve("Roaming").path
+                File(roaming, "$ApplicationName/cache")
+            }
             os.contains("mac") || os.contains("darwin") -> File(System.getProperty("user.home"), "Library/Caches/$ApplicationName")
             else -> File(System.getProperty("user.home"), ".cache/$ApplicationName")
         }
+        log.info("userDataDir={}", dir.absolutePath)
+        dir
     }
 
     private fun File.check(): File {
