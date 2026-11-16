@@ -2,9 +2,9 @@ name: TV-Multiplatform Build (AppCdsPrebuild)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*.*.*'
+#  push:
+#    tags:
+#      - 'v*.*.*'
 
 jobs:
   set-tag:
