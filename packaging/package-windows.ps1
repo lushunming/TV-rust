@@ -86,14 +86,17 @@ Write-Host "jdk    : $jdkHome"
 # 1) spider-host fat jar
 $jar = Join-Path $Root "spider-host\build\libs\spider-host-all.jar"
 if (-not $SkipHostJar) {
+    # spider-host 是独立 Gradle 工程：wrapper 和构建都在 spider-host 目录内。
+    # 仓库根已经没有 Gradle 构建，`:spider-host:fatJar` 这种任务路径不再存在。
+    $hostDir = Join-Path $Root "spider-host"
     $gradle = $GradleCmd
-    if (-not $gradle) { $gradle = Join-Path $Root "gradlew.bat" }
+    if (-not $gradle) { $gradle = Join-Path $hostDir "gradlew.bat" }
     if (-not (Test-Path $gradle)) { throw "Gradle not found: $gradle" }
-    Write-Host "building :spider-host:fatJar ..."
-    Push-Location $Root
+    Write-Host "building spider-host fatJar ..."
+    Push-Location $hostDir
     try {
-        & $gradle --console=plain :spider-host:fatJar
-        if ($LASTEXITCODE -ne 0) { throw "gradle :spider-host:fatJar failed ($LASTEXITCODE)" }
+        & $gradle --console=plain fatJar
+        if ($LASTEXITCODE -ne 0) { throw "gradle fatJar failed ($LASTEXITCODE)" }
     } finally {
         Pop-Location
     }

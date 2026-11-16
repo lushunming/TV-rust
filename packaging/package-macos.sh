@@ -32,7 +32,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || die "此脚本只能在 macOS 上运行（jlink 不能交叉生成运行时）"
 [ -f "$MODULES_FILE" ] || die "缺少模块清单: $MODULES_FILE"
-[ -f "$JAR" ] || die "缺少 spider-host jar: $JAR（先执行 gradlew :spider-host:fatJar）"
+[ -f "$JAR" ] || die "缺少 spider-host jar: $JAR（先执行 cd spider-host && ./gradlew fatJar）"
 [ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（需要 JDK 25，且包含 jlink）"
 JLINK="$JAVA_HOME/bin/jlink"
 [ -x "$JLINK" ] || die "找不到 jlink: $JLINK"

@@ -31,7 +31,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # ---------- 前置检查 ----------
 [ -f "$MODULES_FILE" ] || die "缺少模块清单: $MODULES_FILE"
-[ -f "$JAR" ] || die "缺少 spider-host jar: $JAR（先执行 gradlew :spider-host:fatJar）"
+[ -f "$JAR" ] || die "缺少 spider-host jar: $JAR（先执行 cd spider-host && ./gradlew fatJar）"
 [ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（需要 JDK 25，且包含 jlink）"
 JLINK="$JAVA_HOME/bin/jlink"
 [ -x "$JLINK" ] || die "找不到 jlink: $JLINK"

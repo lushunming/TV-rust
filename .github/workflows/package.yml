@@ -22,7 +22,7 @@ jobs:
           - os: windows-latest
             artifact: TVRust-win-x64
             pkg: dist/TVRust-*-win-x64.zip
-          - os: macos-14          # Apple Silicon
+          - os: macos-15          # Apple Silicon（macos-14 镜像已于 2026-11-02 退役）
             artifact: TVRust-macos-arm64
             pkg: dist/TVRust-*-macos-arm64.dmg
           - os: ubuntu-22.04      # 较老 glibc，兼容性更好
@@ -75,7 +75,7 @@ jobs:
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./packaging/package-windows.ps1 -SkipHostJar -SkipCargoBuild -RecreateRuntime -Jdk "$env:JAVA_HOME" -Version "${{ steps.ver.outputs.version }}"
+        run: ./packaging/package-windows.ps1 -SkipHostJar -RecreateRuntime -Jdk "$env:JAVA_HOME" -Version "${{ steps.ver.outputs.version }}"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
