@@ -34,7 +34,8 @@ impl Default for Settings {
             java_path: "java".into(),
             host_jar: None,
             search_batch: 2,
-            host_memory_mb: 1024,
+            // JDK 25（LTS）下 G1 + 字符串去重让同样负载的堆占用更可控，512m 足够跑爬虫宿主
+            host_memory_mb: 512,
             last_site_key: None,
         }
     }
@@ -46,6 +47,9 @@ impl Settings {
         let path = dir.join("settings.json");
         std::fs::read_to_string(&path)
             .ok()
+            // Windows 记事本保存会加 BOM，serde_json 会直接报 “expected value”，
+            // 那样用户手改过的设置会被静默丢弃并退回默认值（看起来像“配置全丢了”）。
+            .map(|s| s.trim_start_matches('\u{feff}').to_string())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
     }

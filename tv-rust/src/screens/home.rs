@@ -1,9 +1,10 @@
 //! 首页：站源选择 + 分类 + 筛选 + 海报网格 + 分页
 
-use crate::app::TVApp;
+use crate::app::{Screen, TVApp};
 use crate::core::models::{Filter, Type, Vod};
 use crate::theme::{ACCENT, CARD, TEXT, TEXT_DIM};
 use egui::{Align2, Color32, Pos2, Rect, RichText, ScrollArea, Sense, Vec2};
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub struct HomeState {
@@ -47,6 +48,7 @@ impl HomeState {
 
 impl TVApp {
     pub fn ui_home(&mut self, ctx: &egui::Context) {
+        self.tick_hot_prompt(ctx);
         egui::TopBottomPanel::top("home_sites").show(ctx, |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -133,6 +135,11 @@ impl TVApp {
                     if !kind.is_empty() {
                         ui.label(RichText::new(kind).color(TEXT_DIM).size(12.0));
                     }
+                }
+
+                ui.add_space(14.0);
+                if self.hot_prompt_pill(ui).clicked() {
+                    self.screen = Screen::Search;
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -271,6 +278,67 @@ impl TVApp {
                 self.load_more_category();
             }
         });
+    }
+
+    /// 首页顶栏搜索框：轮播热搜标题作为提示（对齐原项目 `searchBarPrompt()`）
+    pub fn hot_prompt_pill(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let has_prompt = !self.hot.prompt.trim().is_empty();
+        let text = if has_prompt {
+            self.hot.prompt.clone()
+        } else {
+            "搜索影规剧、综艺、动漫…".to_string()
+        };
+        let width = (ui.available_width() * 0.4).clamp(200.0, 340.0);
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 30.0), Sense::click());
+        let painter = ui.painter_at(rect);
+
+        if resp.hovered() {
+            painter.rect_filled(rect.expand(1.0), 16.0, ACCENT.gamma_multiply(0.55));
+        }
+        painter.rect_filled(rect, 15.0, CARD);
+
+        painter.text(
+            Pos2::new(rect.left() + 14.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            truncate_chars(&text, 18),
+            egui::FontId::proportional(13.0),
+            if has_prompt { TEXT } else { TEXT_DIM },
+        );
+        // 放大镜图标用矢量绘制，避免中文字体缺少 🔍 时出现豆腐块
+        let icon_center = Pos2::new(rect.right() - 18.0, rect.center().y);
+        let stroke = egui::Stroke::new(1.5_f32, ACCENT);
+        painter.circle_stroke(icon_center, 4.5, stroke);
+        painter.line_segment(
+            [
+                Pos2::new(icon_center.x + 3.2, icon_center.y + 3.2),
+                Pos2::new(icon_center.x + 7.0, icon_center.y + 7.0),
+            ],
+            stroke,
+        );
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
+
+    /// 热搜轮播：首条 1.5s 后开始，每 2s 换一条（与原 Kotlin 实现同节奏）
+    fn tick_hot_prompt(&mut self, ctx: &egui::Context) {
+        if self.hot.items.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        if self.hot.prompt.trim().is_empty() || self.hot.next_at.is_none() {
+            self.hot.idx = self.hot.idx.min(self.hot.items.len() - 1);
+            self.hot.prompt = self.hot.items[self.hot.idx].title.clone();
+            self.hot.next_at = Some(now + Duration::from_millis(1500));
+        } else if let Some(next) = self.hot.next_at {
+            if now >= next {
+                self.hot.idx = (self.hot.idx + 1) % self.hot.items.len();
+                self.hot.prompt = self.hot.items[self.hot.idx].title.clone();
+                self.hot.next_at = Some(now + Duration::from_secs(2));
+            }
+        }
+        if let Some(next) = self.hot.next_at {
+            let wait = next.saturating_duration_since(Instant::now());
+            ctx.request_repaint_after(wait.max(Duration::from_millis(50)));
+        }
     }
 
     /// 海报单元：图 + 名称 + 备注；返回点击响应。site_key 用于取站点 header 拉图。

@@ -1,9 +1,11 @@
 pub mod config;
 pub mod history;
 pub mod host;
+pub mod hot;
 pub mod log;
 pub mod models;
 pub mod paths;
 pub mod player;
 pub mod settings;
+pub mod suggest;
 pub mod textures;

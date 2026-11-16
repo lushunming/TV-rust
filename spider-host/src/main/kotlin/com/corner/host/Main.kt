@@ -6,7 +6,9 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.FileDescriptor
 import java.io.FileOutputStream
+import java.io.FilterOutputStream
 import java.io.InputStreamReader
+import java.io.OutputStream
 import java.io.PrintStream
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -21,8 +23,13 @@ fun main() {
     System.setProperty("tv.log.dir", resolveLogDir())
 
     // 保留真实 stdout 专用于协议；爬虫/依赖库对 System.out 的直接输出一律重定向到 stderr
-    val stdout = PrintStream(FileOutputStream(FileDescriptor.out), true, Charsets.UTF_8)
-    System.setOut(PrintStream(FileOutputStream(FileDescriptor.err), true, Charsets.UTF_8))
+    // 注意：fd 1/2 的生命周期属于整个进程，PrintStream.close() 会连带关掉底层 FileDescriptor。
+    // 旧写法把 System.out 又包了一层 fd 2，任何第三方库调用 System.out.close() 都会把 stderr
+    // 一起关掉——Rust 侧读到管道 EOF，误判“宿主退出或崩溃”，同时丢掉之后所有宿主日志。
+    val stdout = PrintStream(shield(FileDescriptor.out), true, Charsets.UTF_8)
+    val stderr = PrintStream(shield(FileDescriptor.err), true, Charsets.UTF_8)
+    System.setOut(stderr)
+    System.setErr(stderr)
 
     val cores = Runtime.getRuntime().availableProcessors()
     val pool = Executors.newFixedThreadPool(maxOf(4, cores - 2))
@@ -125,6 +132,19 @@ private fun clip(text: String?, max: Int): String = when {
     text == null -> "null"
     text.length <= max -> text
     else -> text.take(max) + "…(共 ${text.length} 字符)"
+}
+
+/// 包一层「close 只 flush」的输出流：fd 属于进程，任何库把它关掉都会连带废掉
+/// System.out / System.err，导致宿主与 UI 的日志通道彻底断开。
+private fun shield(fd: FileDescriptor): OutputStream = object : FilterOutputStream(FileOutputStream(fd)) {
+    override fun close() {
+        flush()
+    }
+
+    // 默认实现按单字节 write，日志量大时会明显拖慢
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        out.write(b, off, len)
+    }
 }
 
 /// 日志目录：与缓存同根（%AppData%\TV-Multiplatform\cache\log），

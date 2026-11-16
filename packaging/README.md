@@ -29,7 +29,7 @@ Rust 侧按"exe 同级目录"自动查找 jar 与 `runtime/bin/java`，所以三
 ## Windows
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File packaging\package-windows.ps1 -Jdk "D:\devtools\corretto-21"
+powershell -ExecutionPolicy Bypass -File packaging\package-windows.ps1 -Jdk "D:\devtools\corretto-25"
 # 只换 jar / 只重打 zip：
 powershell -ExecutionPolicy Bypass -File packaging\package-windows.ps1 -SkipCargoBuild -SkipHostJar
 # 改了模块清单，需要重建运行时：
@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File packaging\package-windows.ps1 -SkipCarg
 ## macOS
 
 ```bash
-JAVA_HOME=$(/usr/libexec/java_home -v 21) ./packaging/package-macos.sh
+JAVA_HOME=$(/usr/libexec/java_home -v 25) ./packaging/package-macos.sh
 # 正式分发（Developer ID + 后续公证）：
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./packaging/package-macos.sh
 ```
@@ -54,7 +54,7 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./packaging/package
 ## Linux
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./packaging/package-linux.sh
+JAVA_HOME=/usr/lib/jvm/temurin-25-jdk ./packaging/package-linux.sh
 ```
 
 - 建议在较老的发行版（如 Ubuntu 22.04）构建，避免 glibc 版本过高导致老系统跑不起来；

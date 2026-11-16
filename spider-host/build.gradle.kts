@@ -1,27 +1,22 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-// settings.gradle.kts 的 pluginManagement 已把 kotlin("jvm") 2.3.0 载入构建类路径，
-// 模块内不能再以不同版本请求（会报 already on the classpath）。
-// serialization 插件因此走经典 buildscript classpath + apply 方式，版本与 kotlin 保持一致。
-buildscript {
-    dependencies {
-        classpath("org.jetbrains.kotlin:kotlin-serialization:2.3.0")
-    }
-}
-
+// spider-host: 轻量 JVM 宿主进程，**独立 Gradle 工程**（settings.gradle.kts 在本目录）。
+// 职责：加载爬虫 jar（URLClassLoader），以 stdio JSON-RPC 方式向 Rust UI 提供爬虫调用。
+// 不依赖 composeApp / Compose / Room / Ktor，SDK 面以源码副本形式内置（com.github.catvod.* / com.corner.* 工具类）。
+// 插件版本必须在这里显式声明——不再有仓库根的 pluginManagement 兜底。
 plugins {
-    kotlin("jvm")
+    kotlin("jvm") version "2.3.20"
+    kotlin("plugin.serialization") version "2.3.20"
     application
 }
 
-apply(plugin = "org.jetbrains.kotlin.plugin.serialization")
-
-// spider-host: 轻量 JVM 宿主进程。
-// 职责：加载爬虫 jar（URLClassLoader），以 stdio JSON-RPC 方式向 Rust UI 提供爬虫调用。
-// 不依赖 composeApp / Compose / Room / Ktor，SDK 面以源码副本形式内置（com.github.catvod.* / com.corner.* 工具类）。
+repositories {
+    mavenCentral()
+}
 
 dependencies {
-    // 与 composeApp 的 "spider depend on" 依赖保持一致，保证既有爬虫 jar 可直接运行
+    // SDK 面依赖：用 api 而非 implementation —— 爬虫 jar 通过 URLClassLoader 以宿主为父加载器，
+    // 编译期也算“对外契约”，后续若拆出 SDK 模块可直接继承。
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     // 部分爬虫（如 BaiDuPan）直接使用协程，宿主必须提供
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
@@ -37,6 +32,9 @@ dependencies {
     api("org.nanohttpd:nanohttpd:2.3.1")
     api("com.google.guava:guava:31.1-jre")
     api("cn.hutool:hutool-all:5.8.27")
+    // 部分网盘站（如「电影云集」）用 zstd 解压分享页数据，缺这个类会直接
+    // NoClassDefFoundError: com/github/luben/zstd/ZstdException —— 属于宿主该提供的运行时依赖。
+    api("com.github.luben:zstd-jni:1.5.7-4")
 
     implementation("org.apache.commons:commons-lang3:3.14.0")
     implementation("org.slf4j:slf4j-api:2.0.13")
@@ -45,6 +43,8 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
+// 字节码目标保持 17：Kotlin 2.3.20 最高只能产出 JVM 25，且爬虫 jar 生态普遍按 17 编译。
+// 「JDK 25」升级落在运行时（jlink 镜像 / 启动参数），不在字节码版本。
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)

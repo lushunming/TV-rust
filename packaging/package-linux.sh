@@ -2,7 +2,7 @@
 # 构建 Linux 便携包（tar.gz）。
 #
 # 必须在 Linux 上运行：jlink 只能生成“当前平台”的运行时，无法交叉生成。
-# 依赖：bash、cargo、JDK 21（JAVA_HOME，需包含 jlink）
+# 依赖：bash、cargo、JDK 25（JAVA_HOME，需包含 jlink）
 #
 # 用法：
 #   ./packaging/package-linux.sh
@@ -32,7 +32,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # ---------- 前置检查 ----------
 [ -f "$MODULES_FILE" ] || die "缺少模块清单: $MODULES_FILE"
 [ -f "$JAR" ] || die "缺少 spider-host jar: $JAR（先执行 gradlew :spider-host:fatJar）"
-[ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（需要 JDK 21，且包含 jlink）"
+[ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（需要 JDK 25，且包含 jlink）"
 JLINK="$JAVA_HOME/bin/jlink"
 [ -x "$JLINK" ] || die "找不到 jlink: $JLINK"
 

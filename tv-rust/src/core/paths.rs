@@ -31,6 +31,11 @@ pub fn config_cache() -> PathBuf {
     shared_cache("config")
 }
 
+/// 热搜缓存目录（与 Kotlin Paths.hotCache() 相同：data/cache/hot）
+pub fn hot_cache() -> PathBuf {
+    shared_cache("hot")
+}
+
 /// Rust 侧自有数据（历史/设置），不与 Kotlin 的 Room DB 混用
 pub fn rust_data() -> PathBuf {
     cache_root().join("rust")

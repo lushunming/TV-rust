@@ -2,7 +2,7 @@
 # 构建 macOS 应用包（TVRust.app + dmg）。
 #
 # 必须在 macOS 上运行：jlink 只能生成当前平台运行时，且 .app 的签名/公证只有 macOS 提供。
-# 依赖：bash、cargo、JDK 21（JAVA_HOME，需包含 jlink）、Xcode 命令行工具（codesign/hdiutil）
+# 依赖：bash、cargo、JDK 25（JAVA_HOME，需包含 jlink）、Xcode 命令行工具（codesign/hdiutil）
 #
 # 用法：
 #   ./packaging/package-macos.sh
@@ -33,7 +33,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] || die "此脚本只能在 macOS 上运行（jlink 不能交叉生成运行时）"
 [ -f "$MODULES_FILE" ] || die "缺少模块清单: $MODULES_FILE"
 [ -f "$JAR" ] || die "缺少 spider-host jar: $JAR（先执行 gradlew :spider-host:fatJar）"
-[ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（需要 JDK 21，且包含 jlink）"
+[ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（需要 JDK 25，且包含 jlink）"
 JLINK="$JAVA_HOME/bin/jlink"
 [ -x "$JLINK" ] || die "找不到 jlink: $JLINK"
 

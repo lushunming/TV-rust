@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"       # jlink 必须来自目标平台 JDK
+          java-version: "25"       # jlink 必须来自目标平台 JDK；宿主运行时用 25 LTS
 
       - uses: dtolnay/rust-toolchain@stable
 

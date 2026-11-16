@@ -35,6 +35,10 @@ pub enum HostStatus {
 pub enum AppEvent {
     ConfigReady(RawApiConfig, String),
     ConfigError(String),
+    /// 热搜榜（首页顶栏搜索框轮播提示的数据源）
+    HotList(Vec<crate::core::hot::HotData>),
+    /// 搜索联想词（query 用于丢弃过期响应）
+    Suggest { query: String, items: Vec<String> },
     HomeTypes(SpiderResult),
     HomeVideos(SpiderResult),
     CategoryPage { page: i32, result: SpiderResult },
@@ -56,6 +60,28 @@ pub enum AppEvent {
     Toast(String),
 }
 
+/// 搜索框轮播提示 + 热搜数据（对应原 Kotlin `VideoScreenState.prompt` / `isRunning`）
+pub struct HotState {
+    pub items: Vec<crate::core::hot::HotData>,
+    /// 当前轮播到第几条
+    pub idx: usize,
+    /// 当前显示的提示文案
+    pub prompt: String,
+    /// 下一次切换时刻；None 表示尚未开始轮播
+    pub next_at: Option<Instant>,
+}
+
+impl Default for HotState {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            idx: 0,
+            prompt: String::new(),
+            next_at: None,
+        }
+    }
+}
+
 pub struct TVApp {
     pub settings: Settings,
     pub host: Option<Arc<SpiderHost>>,
@@ -72,6 +98,7 @@ pub struct TVApp {
     pub detail_back: Screen,
 
     pub home: HomeState,
+    pub hot: HotState,
     pub search: SearchState,
     pub detail: DetailState,
     pub history_store: HistoryStore,
@@ -106,6 +133,7 @@ impl TVApp {
             screen: Screen::Home,
             detail_back: Screen::Home,
             home: HomeState::default(),
+            hot: HotState::default(),
             search: SearchState::default(),
             detail: DetailState::default(),
             history_store: HistoryStore::load(),
@@ -118,6 +146,7 @@ impl TVApp {
         app.settings_page.java_path_edit = app.settings.java_path.clone();
         app.settings_page.host_jar_edit = app.settings.host_jar.clone().unwrap_or_default();
         app.start_host();
+        app.load_hot();
         app
     }
 
@@ -137,13 +166,25 @@ impl TVApp {
             return;
         };
         self.host_status = HostStatus::Starting;
-        let jvm_arg = format!("-Xmx{}m", self.settings.host_memory_mb);
+        // 宿主跑在 JDK 25（LTS）上：G1 是服务端类机器的默认收集器，
+        // 这里再补三件事——小初始堆、空闲时把堆还给系统、字符串去重，
+        // 让长时间挂着看剧时宿主的内存曲线往下走而不是只涨不降。
+        let heap = self.settings.host_memory_mb.max(128);
+        let initial = 16.min(heap);
+        let jvm_args = vec![
+            format!("-Xms{initial}m"),
+            format!("-Xmx{heap}m"),
+            "-XX:+UseG1GC".to_string(),
+            "-XX:G1PeriodicGCInterval=300000".to_string(),
+            "-XX:+UseStringDeduplication".to_string(),
+            "-XX:+ExitOnOutOfMemoryError".to_string(),
+        ];
         let java = crate::core::settings::resolve_java(&self.settings.java_path);
         crate::core::log::info(format!(
-            "starting host: java={} jar={} heap={}m",
-            java, jar, self.settings.host_memory_mb
+            "starting host: java={} jar={} heap={}m args={:?}",
+            java, jar, heap, jvm_args
         ));
-        match SpiderHost::spawn(&java, &jar, &[jvm_arg]) {
+        match SpiderHost::spawn(&java, &jar, &jvm_args) {
             Ok(h) => {
                 self.host = Some(h);
                 crate::core::log::info("spider-host 进程已创建，等待 hello");
@@ -238,6 +279,25 @@ impl TVApp {
                     let _ = tx.send(AppEvent::ConfigError(format!("{e:#}")));
                 }
             }
+        });
+    }
+
+    // ---------- 热搜（顶栏搜索框提示） ----------
+
+    /// 先用磁盘缓存立即可用，再后台刷新（与 Kotlin `Hot.getHotList()` 一致）
+    pub fn load_hot(&mut self) {
+        let cached = crate::core::hot::load_cache();
+        if !cached.is_empty() {
+            crate::core::log::info(format!("热搜缓存 {} 条", cached.len()));
+            self.hot.items = cached;
+        }
+        let tx = self.event_tx.clone();
+        std::thread::spawn(move || match crate::core::hot::fetch() {
+            Ok(list) if !list.is_empty() => {
+                let _ = tx.send(AppEvent::HotList(list));
+            }
+            Ok(_) => {}
+            Err(e) => crate::core::log::warn(format!("热搜拉取失败: {e:#}")),
         });
     }
 
@@ -792,6 +852,16 @@ impl TVApp {
                     crate::core::log::warn(format!("play error: {e}"));
                     self.detail.playing = false;
                     self.toast(e);
+                }
+                AppEvent::HotList(list) => {
+                    crate::core::log::info(format!("热搜 {} 条", list.len()));
+                    self.hot.items = list;
+                    self.hot.idx = 0;
+                    self.hot.prompt.clear();
+                    self.hot.next_at = None;
+                }
+                AppEvent::Suggest { query, items } => {
+                    self.search.suggest.absorb(query, items);
                 }
                 AppEvent::Toast(msg) => {
                     self.toast(msg);
