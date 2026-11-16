@@ -1,8 +1,10 @@
 name: package
 
-# 三平台产物：每个平台在自己的 runner 上编译 + jlink（jlink 不能交叉生成运行时）。
+# 两平台产物：每个平台在自己的 runner 上编译 + jlink（jlink 不能交叉生成运行时）。
+# macOS 暂不发布：没有 Developer ID 证书就无法签名/公证，出包会被 Gatekeeper 拦下，
+# 体感上等于发了个装不上的包；等签名链路具备后再加回来（packaging/package-macos.sh 保留备用）。
 # 触发方式：
-#   - 推 tag（v*）        → 三平台构建完成后自动发布 GitHub Release
+#   - 推 tag（v*）        → 两个平台构建完成后自动发布 GitHub Release
 #   - workflow_dispatch  → 只构建并上传 artifacts，不发布（用于验证打包链路）
 on:
   workflow_dispatch:
@@ -22,9 +24,6 @@ jobs:
           - os: windows-latest
             artifact: TVRust-win-x64
             pkg: dist/TVRust-*-win-x64.zip
-          - os: macos-15          # Apple Silicon（macos-14 镜像已于 2026-11-02 退役）
-            artifact: TVRust-macos-arm64
-            pkg: dist/TVRust-*-macos-arm64.dmg
           - os: ubuntu-22.04      # 较老 glibc，兼容性更好
             artifact: TVRust-linux-x64
             pkg: dist/TVRust-*-linux-x86_64.tar.gz
@@ -76,14 +75,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./packaging/package-windows.ps1 -SkipHostJar -RecreateRuntime -Jdk "$env:JAVA_HOME" -Version "${{ steps.ver.outputs.version }}"
-
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          chmod +x packaging/package-macos.sh
-          ./packaging/package-macos.sh
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
