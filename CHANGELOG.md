@@ -1,4 +1,5 @@
 # 未发布（rust 分支）
+- 修复 Windows 桌面快捷方式没有 logo：`TVRust.exe` 之前只有运行时窗口图标，PE 文件本身没有图标资源，资源管理器/快捷方式只能显示默认空白图标。新增 `tv-rust/assets/icon.ico`（16–256 多尺寸）与 `build.rs`/`winres`，把图标嵌入 exe（GNU 目标额外直接链接 `resource.o`，避免静态资源库被链接器丢弃）；桌面快捷方式同步指向 `TVRust.ico`
 - 修复 UC 站点 `NoClassDefFoundError: Could not initialize class com.github.catvod.api.UCApi$Loader`：第三方爬虫在刷新 token 失败时会把错误 JSON 原样写入 `~/TV/.uctoken`，下次 `UCApi` 初始化解析 `refresh_token` 触发 NPE，导致类初始化永久失败（同 JVM 内 UC/百度/夸克搜索站全部报错）。宿主新增启动自愈：首次加载爬虫前校验 token 缓存，错误响应或无法解析的内容重命名为 `.uctoken.bad-<时间戳>` 隔离，`~/TV/.uc` 登录 cookie 保留；新增 5 个单测覆盖有效/错误/空 token/损坏 JSON/文件缺失
 - **spider-host API 层改为 HTTP**：业务调用统一走本地 `POST http://127.0.0.1:<apiPort>/api/rpc` 与语义化 `/api/...` 端点（配置、首页、分类、搜索、详情、播放、代理设置），不再使用 stdio JSON 行协议；stdout 仅保留一行 hello 握手，stdin 仅处理 `quit`/EOF
 - 修复 HTTP 请求体中文乱码：NanoHTTPD 对不带 `charset` 的 `application/json` 默认按 US-ASCII 解码，导致搜索词/站点名/extend 值变成“������”；现在 API 层直接按 UTF-8 读取原始 body（与 Content-Type 是否带 charset 无关），并补充中文站点名、中文 `cfgId`、中文搜索词测试
