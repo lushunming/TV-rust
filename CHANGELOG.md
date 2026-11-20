@@ -1,4 +1,13 @@
 # 未发布（rust 分支）
+- 修复 UC 站点 `NoClassDefFoundError: Could not initialize class com.github.catvod.api.UCApi$Loader`：第三方爬虫在刷新 token 失败时会把错误 JSON 原样写入 `~/TV/.uctoken`，下次 `UCApi` 初始化解析 `refresh_token` 触发 NPE，导致类初始化永久失败（同 JVM 内 UC/百度/夸克搜索站全部报错）。宿主新增启动自愈：首次加载爬虫前校验 token 缓存，错误响应或无法解析的内容重命名为 `.uctoken.bad-<时间戳>` 隔离，`~/TV/.uc` 登录 cookie 保留；新增 5 个单测覆盖有效/错误/空 token/损坏 JSON/文件缺失
+- **spider-host API 层改为 HTTP**：业务调用统一走本地 `POST http://127.0.0.1:<apiPort>/api/rpc` 与语义化 `/api/...` 端点（配置、首页、分类、搜索、详情、播放、代理设置），不再使用 stdio JSON 行协议；stdout 仅保留一行 hello 握手，stdin 仅处理 `quit`/EOF
+- 修复 HTTP 请求体中文乱码：NanoHTTPD 对不带 `charset` 的 `application/json` 默认按 US-ASCII 解码，导致搜索词/站点名/extend 值变成“������”；现在 API 层直接按 UTF-8 读取原始 body（与 Content-Type 是否带 charset 无关），并补充中文站点名、中文 `cfgId`、中文搜索词测试
+- **新增 Swagger 调试文档**：`/swagger`（Swagger UI）与 `/openapi.json`（OpenAPI 3.0.3），swagger-ui 资源随 fat jar 打包、离线可用；`/api/health`、`/api/server/info`、`/api/sites` 可直接在浏览器测试
+- API 默认监听 `127.0.0.1:9980`（9980–9999 被占用时自动顺延，仍失败则退回系统临时端口），实际端口写进 hello 的 `apiPort`/`api`；代理端口 `9978` 保持不变
+- `serverInfo` 增加 `version`/`apiPort`/`apiBase`/`swagger`/`openapi` 字段
+- **tv-rust 客户端改为 HTTP**：`SpiderHost` 使用 reqwest blocking（`no_proxy`、连接超时、按请求超时），自动等待 hello 下发 api 地址；`shutdown` 优先调用 `/api/shutdown`，失败再退回 stdin `quit`
+- 新增 `HttpApiServerTest` 冒烟测试：健康检查、OpenAPI 路径、Swagger 页面/静态资产、未知方法 400、配置加载与站点列表、站点不存在 400
+- `spider-host/docs/spider-host-api.md` 全面改写为 HTTP 版（含 Swagger、curl 示例、状态码与迁移说明）
 - 首页视频列表改为滚动加载：删掉分页按钮/"加载更多"，滚到底自动请求下一页，底部显示"加载中/继续向下滚动/已全部加载"；站点未上报 pagecount 时靠"下一页为空"判定到底
 - 字体整体调大（正文 16 / 按钮 15 / 标题 22），海报单元 150px、名称 15px
 - 站源选择改为下拉框：带搜索过滤（名称/key/类型）、当前项高亮、右侧显示站点数与 `csp_` 类型；不再用横向长条堆按钮

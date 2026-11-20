@@ -1,7 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // spider-host: 轻量 JVM 宿主进程，**独立 Gradle 工程**（settings.gradle.kts 在本目录）。
-// 职责：加载爬虫 jar（URLClassLoader），以 stdio JSON-RPC 方式向 Rust UI 提供爬虫调用。
+// 职责：加载爬虫 jar（URLClassLoader），以本地 HTTP JSON API 方式向 Rust UI 提供爬虫调用，
+// 并内置 Swagger UI（/swagger）与 OpenAPI 描述（/openapi.json）方便直接调试。
 // 不依赖 composeApp / Compose / Room / Ktor，SDK 面以源码副本形式内置（com.github.catvod.* / com.corner.* 工具类）。
 // 插件版本必须在这里显式声明——不再有仓库根的 pluginManagement 兜底。
 plugins {
@@ -39,8 +40,12 @@ dependencies {
     implementation("org.apache.commons:commons-lang3:3.14.0")
     implementation("org.slf4j:slf4j-api:2.0.13")
     implementation("ch.qos.logback:logback-classic:1.3.14")
+    // Swagger UI 静态资源：打进 fat jar 后由 HttpApiServer 从 classpath 提供，离线可用
+    implementation("org.webjars:swagger-ui:5.17.14")
 
     testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 // 字节码目标保持 17：Kotlin 2.3.20 最高只能产出 JVM 25，且爬虫 jar 生态普遍按 17 编译。

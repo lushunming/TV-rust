@@ -90,6 +90,19 @@ object Host {
 
     fun configId(): String = cfgId
 
+    /** 已加载站点摘要，供 HTTP API（`GET /api/sites`）与调试页使用 */
+    fun sitesInfo(): JsonArray = buildJsonArray {
+        sites.values.sortedBy { it.key }.forEach { site ->
+            add(buildJsonObject {
+                put("key", site.key)
+                put("name", site.name)
+                put("api", site.api)
+                put("jar", site.jar ?: "")
+                put("type", site.type)
+            })
+        }
+    }
+
     /**
      * /proxy 端点的实际转发入口。
      * 优先走 jar 的静态 proxy(Map) 方法（FongMi 标准），失败时回退到最近站点的 proxyLocal 实例方法，
@@ -177,7 +190,7 @@ object Host {
             "searchContent" -> {
                 val site = requireSite(params.str("siteKey"))
                 val pg = params.str("pg").ifBlank { "1" }
-                spiderJson(site, getSpider(site).searchContent(params.str("key"), params.bool("quick"), pg))
+                spiderJson(site, getSpider(site).searchContent(params.str("key"), params.bool("quick")))
             }
 
             "playerContent" -> {
@@ -194,6 +207,11 @@ object Host {
             }
 
             "serverInfo" -> buildJsonObject {
+                put("version", HOST_VERSION)
+                put("apiPort", HttpApiServer.port)
+                put("apiBase", HttpApiServer.baseUrl)
+                put("swagger", "${HttpApiServer.baseUrl}/swagger")
+                put("openapi", "${HttpApiServer.baseUrl}/openapi.json")
                 put("proxyPort", ProxyServer.port)
                 put("proxyBase", ProxyServer.baseUrl)
                 put("sites", sites.size)

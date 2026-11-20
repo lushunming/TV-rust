@@ -1,0 +1,577 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "spider-host HTTP API",
+    "version": "1.2.0",
+    "description": "TV-Rust 内置 JVM 宿主（spider-host）的本地 HTTP API。\n\n- 仅监听 `127.0.0.1`，端口见启动握手行 `hello` 的 `apiPort`/`api` 字段（默认 9980，被占用自动顺延）。\n- 业务请求统一走 HTTP；`/api/rpc` 与语义化端点等价，便于脚本与 Swagger 调试。\n- 媒体转发仍由独立的 `/proxy` 端口（默认 9978）提供。\n- 调用 `loadConfig` 前，除健康检查与 `serverInfo` 外的业务端点都会返回 400。\n\n所有响应都是统一信封：`{\"ok\":true,\"result\":...,\"error\":null,\"elapsedMs\":12}`。"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "当前 spider-host 实例（相对路径）"
+    }
+  ],
+  "tags": [
+    { "name": "系统", "description": "健康检查、运行信息与生命周期" },
+    { "name": "配置", "description": "配置加载、出站代理与缓存" },
+    { "name": "内容", "description": "首页、分类、搜索、详情、播放等爬虫能力" },
+    { "name": "调试", "description": "通用 RPC 入口，与语义化端点等价" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["系统"],
+        "summary": "健康检查",
+        "description": "返回宿主版本、API/代理端口与运行时长，不依赖配置是否已加载。",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "运行中",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Envelope" },
+                "example": {
+                  "ok": true,
+                  "result": {
+                    "status": "up",
+                    "version": "1.2.0",
+                    "apiPort": 9980,
+                    "apiBase": "http://127.0.0.1:9980",
+                    "proxyPort": 9978,
+                    "proxyBase": "http://127.0.0.1:9978",
+                    "swagger": "http://127.0.0.1:9980/swagger",
+                    "uptimeMs": 1024
+                  },
+                  "error": null
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/info": {
+      "get": {
+        "tags": ["系统"],
+        "summary": "宿主运行信息",
+        "description": "对应宿主方法 `serverInfo`：端口、站点数量、当前配置 id。",
+        "operationId": "serverInfo",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites": {
+      "get": {
+        "tags": ["配置"],
+        "summary": "已加载站点列表",
+        "description": "返回 `loadConfig` 之后宿主内存中的站点摘要；未加载配置时为空数组。",
+        "operationId": "listSites",
+        "responses": {
+          "200": {
+            "description": "站点摘要数组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "array",
+                          "items": { "$ref": "#/components/schemas/Site" }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rpc": {
+      "post": {
+        "tags": ["调试"],
+        "summary": "通用 RPC 入口",
+        "description": "按宿主方法名分发，与语义化端点等价。Rust 客户端使用该端点；`params` 直接透传给宿主方法。",
+        "operationId": "rpc",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RpcRequest" },
+              "example": {
+                "method": "homeContent",
+                "params": { "siteKey": "qq", "filter": true }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/config/load": {
+      "post": {
+        "tags": ["配置"],
+        "summary": "加载配置",
+        "description": "解析配置 JSON，装入站点表并返回归一化后的配置字符串。会清空已加载的 jar 与爬虫实例缓存，因此必须重新调用。",
+        "operationId": "loadConfig",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoadConfigRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/proxy/set": {
+      "post": {
+        "tags": ["配置"],
+        "summary": "设置出站代理",
+        "description": "仅影响爬虫的出站 HTTP 客户端，不影响本地 `/proxy` 监听。空字符串表示清除代理。",
+        "operationId": "setProxy",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProxySetRequest" },
+              "example": { "proxy": "127.0.0.1:7890" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/cache/clear": {
+      "post": {
+        "tags": ["配置"],
+        "summary": "清空缓存",
+        "description": "清空 jar 加载器、爬虫实例与站点表；之后必须重新 `loadConfig`。",
+        "operationId": "clearCache",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" }
+        }
+      }
+    },
+    "/api/shutdown": {
+      "post": {
+        "tags": ["系统"],
+        "summary": "停止宿主进程",
+        "description": "先返回响应，随后关闭 HTTP API 与代理并退出 JVM；仅用于调试。",
+        "operationId": "shutdown",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "503": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/home": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "首页内容（分类/筛选/推荐）",
+        "description": "对应 `homeContent`。结果通常是 JSON 字符串；当站点 `init` 失败但列表可用时返回 `{data, warning}`。",
+        "operationId": "homeContent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/HomeRequest" },
+              "example": { "filter": true }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/home-video": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "首页推荐列表",
+        "description": "对应 `homeVideoContent`，通常只返回 `list`。",
+        "operationId": "homeVideoContent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/category": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "分类内容",
+        "description": "对应 `categoryContent`。`extend` 的键值会转成字符串传给爬虫。",
+        "operationId": "categoryContent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CategoryRequest" },
+              "example": {
+                "tid": "1",
+                "pg": "2",
+                "filter": true,
+                "extend": { "area": "大陆", "year": "2024" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/search": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "搜索",
+        "description": "对应 `searchContent`。`pg` 缺省为 `\"1\"`。",
+        "operationId": "searchContent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SearchRequest" },
+              "example": { "key": "繁花", "quick": false, "pg": "1" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/detail": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "详情",
+        "description": "对应 `detailContent`。`ids` 支持字符串数组，也支持逗号分隔字符串。",
+        "operationId": "detailContent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DetailRequest" },
+              "example": { "ids": ["m123"] }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/player": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "播放地址解析",
+        "description": "对应 `playerContent`。返回纯 JSON 字符串，不含 `warning` 包装。",
+        "operationId": "playerContent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PlayerRequest" },
+              "example": {
+                "flag": "qq",
+                "id": "https://v.qq.com/x/cover/xxx.html",
+                "vipFlags": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/recent": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "标记最近使用站点",
+        "description": "对应 `setRecent`。`/proxy` 回退到站点实例 `proxyLocal` 前应先调用。",
+        "operationId": "setRecent",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/destroy": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "销毁站点爬虫",
+        "description": "对应 `destroy`。只调用实例 `destroy()`，不会从缓存移除。",
+        "operationId": "destroy",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/sites/{siteKey}/proxy-local": {
+      "post": {
+        "tags": ["内容"],
+        "summary": "手动调用站点代理",
+        "description": "对应 `proxyLocal`，一般业务无需使用（`/proxy` 已覆盖）。",
+        "operationId": "proxyLocal",
+        "parameters": [{ "$ref": "#/components/parameters/SiteKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProxyLocalRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/proxy": {
+      "get": {
+        "tags": ["系统"],
+        "summary": "媒体代理（独立端口）",
+        "description": "由 ProxyServer 在 9978..9999 提供，不在本 API 端口上。参数 `do`、`url`、`ext` 等透传给爬虫静态 `Proxy.proxy`，失败时回退最近站点的 `proxyLocal`。",
+        "operationId": "proxy",
+        "servers": [{ "url": "http://127.0.0.1:9978" }],
+        "parameters": [
+          { "name": "do", "in": "query", "schema": { "type": "string" }, "example": "img" },
+          { "name": "url", "in": "query", "schema": { "type": "string" } },
+          { "name": "ext", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "媒体流（Content-Type 由爬虫决定）" },
+          "302": { "description": "重定向" },
+          "500": { "description": "代理失败" }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SiteKey": {
+        "name": "siteKey",
+        "in": "path",
+        "required": true,
+        "description": "站点 key（配置中的 sites[].key）",
+        "schema": { "type": "string" },
+        "example": "qq"
+      }
+    },
+    "responses": {
+      "Ok": {
+        "description": "调用成功（业务层是否可用由 `ok` 判断）",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Envelope" }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "参数错误、站点不存在或未知方法",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Envelope" }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "爬虫初始化、下载或解析异常",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Envelope" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": ["ok", "result", "error"],
+        "properties": {
+          "ok": { "type": "boolean", "description": "业务是否成功" },
+          "result": {
+            "nullable": true,
+            "description": "成功时的返回值。内容类方法通常是 JSON 字符串，需要二次解析；也可能是 `{data, warning}` 对象。"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true,
+            "description": "失败原因，格式 `ExceptionClass: message`"
+          },
+          "elapsedMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "宿主处理耗时（毫秒）"
+          }
+        }
+      },
+      "RpcRequest": {
+        "type": "object",
+        "required": ["method"],
+        "properties": {
+          "method": {
+            "type": "string",
+            "description": "宿主方法名",
+            "enum": [
+              "loadConfig",
+              "homeContent",
+              "homeVideoContent",
+              "categoryContent",
+              "detailContent",
+              "searchContent",
+              "playerContent",
+              "setRecent",
+              "serverInfo",
+              "setProxy",
+              "proxyLocal",
+              "destroy",
+              "clearCache"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "方法参数，缺省为 `{}`"
+          }
+        }
+      },
+      "LoadConfigRequest": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": { "type": "string", "description": "配置源原始 JSON 文本（不是对象）" },
+          "url": { "type": "string", "description": "配置源地址，用于解析相对 jar/ext 路径" },
+          "cfgId": { "type": "string", "description": "配置标识，仅用于 serverInfo 回显" }
+        }
+      },
+      "HomeRequest": {
+        "type": "object",
+        "properties": {
+          "filter": { "type": "boolean", "default": false, "description": "是否请求筛选项" }
+        }
+      },
+      "CategoryRequest": {
+        "type": "object",
+        "required": ["tid"],
+        "properties": {
+          "tid": { "type": "string", "description": "分类 id" },
+          "pg": { "type": "string", "default": "1", "description": "页码（字符串）" },
+          "filter": { "type": "boolean", "default": false },
+          "extend": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "筛选项键值"
+          }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": { "type": "string", "description": "关键词" },
+          "quick": { "type": "boolean", "default": false },
+          "pg": { "type": "string", "default": "1" }
+        }
+      },
+      "DetailRequest": {
+        "type": "object",
+        "required": ["ids"],
+        "properties": {
+          "ids": {
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "string", "description": "逗号分隔的 id 串" }
+            ]
+          }
+        }
+      },
+      "PlayerRequest": {
+        "type": "object",
+        "required": ["flag", "id"],
+        "properties": {
+          "flag": { "type": "string", "description": "线路名（来自 vod_play_from）" },
+          "id": { "type": "string", "description": "单集地址（来自 vod_play_url）" },
+          "vipFlags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "解析器白名单"
+          }
+        }
+      },
+      "ProxySetRequest": {
+        "type": "object",
+        "required": ["proxy"],
+        "properties": {
+          "proxy": {
+            "type": "string",
+            "description": "host:port / http://host:port；空串清除代理",
+            "example": "127.0.0.1:7890"
+          }
+        }
+      },
+      "ProxyLocalRequest": {
+        "type": "object",
+        "properties": {
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "透传给爬虫 proxyLocal 的参数"
+          }
+        }
+      },
+      "Site": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string" },
+          "name": { "type": "string" },
+          "api": { "type": "string" },
+          "jar": { "type": "string" },
+          "type": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

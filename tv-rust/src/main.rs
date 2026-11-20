@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 //! TV-Multiplatform 的 Rust (egui) 桌面客户端。
-//! 架构：egui UI ⇄ (stdio JSON-RPC) ⇄ spider-host.jar (JVM, 加载 Java 爬虫)
+//! 架构：egui UI ⇄ (HTTP JSON API) ⇄ spider-host.jar (JVM, 加载 Java 爬虫)
 
 mod app;
 mod core;

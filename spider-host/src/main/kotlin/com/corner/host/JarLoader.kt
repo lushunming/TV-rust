@@ -147,6 +147,9 @@ object JarLoader {
 
     fun getSpider(key: String, api: String, ext: String, jar: String): Spider {
         try {
+            // 必须在任何爬虫类初始化前执行：UC 的 UCApi$Loader 一旦被坏 token 缓存
+            // 触发类初始化失败，同一 JVM 内无法恢复（后续全是 NoClassDefFoundError）。
+            UcTokenCacheGuard.ensureUsable()
             val jaKey = Utils.md5(jar)
             val spKey = jaKey + key
 
