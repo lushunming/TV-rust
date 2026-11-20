@@ -21,3 +21,4 @@ cache
 #/composeApp/src/desktopMain/resources/res
 /tv-rust/target/
 /tv-rust/TV-Multiplatform/
+/dist/
