@@ -358,10 +358,11 @@ unsafe extern "C" fn gl_get_proc(_ctx: *mut c_void, name: *const c_char) -> *mut
         // EGL 优先（Wayland/EGL 环境），再退回 GLX
         for lib_name in ["libEGL.so.1", "libGL.so.1"] {
             if let Ok(lib) = unsafe { libloading::Library::new(lib_name) } {
+                // ManuallyDrop 避免 borrow + move 冲突：函数指针提取后
+                // Library 故意不释放（GL 函数指针要在整个进程内有效）。
+                let lib = std::mem::ManuallyDrop::new(lib);
                 for sym in [b"eglGetProcAddress\0".as_slice(), b"glXGetProcAddressARB\0".as_slice()] {
                     if let Ok(s) = unsafe { lib.get::<GetProc>(sym) } {
-                        // 故意泄漏 Library：GL 函数指针要在整个进程内有效
-                        std::mem::forget(lib);
                         return Some(unsafe { *s });
                     }
                 }
