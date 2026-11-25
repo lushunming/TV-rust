@@ -16,8 +16,9 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
+    #[default]
     Home,
     Search,
     Detail,
@@ -108,6 +109,24 @@ pub struct TVApp {
     pub toast: Option<(String, Instant)>,
     /// 已提示过 init 告警的站点，避免每次刷新都弹同一条
     pub warned_sites: std::collections::HashSet<String>,
+
+    /// 内置（内嵌）mpv 播放器实例；None 表示未在窗口内播放
+    pub internal: Option<crate::core::internal_player::InternalPlayer>,
+    /// 当前播放地址对应的 HTTP 头（重试/重播时复用）
+    pub internal_headers: Vec<(String, String)>,
+    /// 内置播放层 UI 状态
+    pub player_overlay: crate::screens::player::PlayerOverlay,
+    /// 上次 ESC 键是否处于按下状态（用于 Win32 GetAsyncKeyState 防抖）
+    pub esc_was_down: bool,
+    /// 专用 ESC 检测线程的原子标志（15ms 轮询，不会漏掉快速按键）
+    pub esc_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// egui 上下文（用于在非 update 回调中发 ViewportCommand，例如退出全屏）
+    pub egui_ctx: Option<egui::Context>,
+    /// 上次处理 ESC 的时刻：两次 ESC 之间需间隔，避免同一次按键被
+    /// "全局轮询线程 + egui 输入"同时检出而连续触发两次（先退全屏、再关播放）
+    pub last_esc: Option<std::time::Instant>,
+    /// 内置播放器组件（libmpv）的按需下载安装器
+    pub libmpv_installer: crate::core::libmpv_install::LibMpvInstaller,
 }
 
 impl TVApp {
@@ -123,6 +142,7 @@ impl TVApp {
                 ..Default::default()
             },
             settings,
+            libmpv_installer: crate::core::libmpv_install::LibMpvInstaller::new(),
             host: None,
             host_status: HostStatus::Starting,
             proxy_base: None,
@@ -140,6 +160,13 @@ impl TVApp {
             textures: TextureCache::new(),
             toast: None,
             warned_sites: std::collections::HashSet::new(),
+            internal: None,
+            internal_headers: Vec::new(),
+            player_overlay: crate::screens::player::PlayerOverlay::default(),
+            esc_was_down: false,
+            esc_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            egui_ctx: Some(cc.egui_ctx.clone()),
+            last_esc: None,
         };
         // settings_page 已在上面初始化，重新同步编辑框
         app.settings_page.player_path_edit = app.settings.player_path.clone();
@@ -818,34 +845,56 @@ impl TVApp {
                 AppEvent::PlayReady { url, headers, site_key, vod_id, vod_name, vod_pic, flag, ep_url, ep_name } => {
                     self.detail.playing = false;
                     let url = self.localize_url(&url);
-                    let player_path = {
-                        let configured = self.settings.player_path.trim().to_string();
-                        if configured.is_empty() {
-                            crate::core::settings::detect_players().first().map(|d| d.path.clone()).unwrap_or_default()
-                        } else {
-                            configured
-                        }
-                    };
                     let title = if ep_name.is_empty() { vod_name.clone() } else { format!("{} - {}", vod_name, ep_name) };
-                    match crate::core::player::launch(&player_path, &url, &title, &headers) {
-                        Ok(()) => {
-                            self.history_store.upsert(HistoryEntry {
-                                key: format!("{}@@@{}@@@{}", site_key, vod_id, self.cfg_id),
-                                site_key,
-                                vod_id,
-                                cfg_id: self.cfg_id.clone(),
-                                vod_name,
-                                vod_pic,
-                                vod_flag: flag,
-                                ep_name: ep_name.clone(),
-                                episode_url: ep_url,
-                                create_time: now_millis(),
-                            });
-                            self.toast(format!("已启动外部播放器: {}", ep_name));
+
+                    // 无论内置还是外部播放，都先记历史：失败时用户也能在历史里重新找到这一集
+                    self.history_store.upsert(HistoryEntry {
+                        key: format!("{}@@@{}@@@{}@{}", site_key, vod_id, self.cfg_id, ep_url),
+                        site_key: site_key.clone(),
+                        vod_id: vod_id.clone(),
+                        cfg_id: self.cfg_id.clone(),
+                        vod_name: vod_name.clone(),
+                        vod_pic: vod_pic.clone(),
+                        vod_flag: flag.clone(),
+                        ep_name: ep_name.clone(),
+                        episode_url: ep_url.clone(),
+                        create_time: now_millis(),
+                    });
+
+                    let configured = self.settings.player_path.trim();
+                    if !configured.is_empty() {
+                        // 用户配置了外部播放器路径 → 优先使用外部
+                        match crate::core::player::launch(configured, &url, &title, &headers) {
+                            Ok(()) => {
+                                self.toast(format!("已启动外部播放器: {}", ep_name));
+                            }
+                            Err(e) => {
+                                self.toast(format!("{e:#}"));
+                            }
                         }
-                        Err(e) => {
-                            self.toast(format!("{e:#}"));
-                        }
+                    } else {
+                        // 未配置外部播放器 → 使用内置 libmpv
+                        let overlay = crate::screens::player::PlayerOverlay {
+                            visible: true,
+                            title: title.clone(),
+                            site_key: site_key.clone(),
+                            vod_id: vod_id.clone(),
+                            vod_name: vod_name.clone(),
+                            vod_pic: vod_pic.clone(),
+                            flag: flag.clone(),
+                            ep_url: ep_url.clone(),
+                            ep_name: ep_name.clone(),
+                            url: url.clone(),
+                            back: self.screen,
+                            volume: self.settings.internal_volume,
+                            ..Default::default()
+                        };
+                        let header_pairs: Vec<(String, String)> = headers
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        self.internal_headers = header_pairs.clone();
+                        self.start_internal_player(url, header_pairs, overlay);
                     }
                 }
                 AppEvent::PlayError(e) => {
@@ -942,10 +991,67 @@ fn now_millis() -> i64 {
 
 impl eframe::App for TVApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.textures.poll(ctx);
         self.check_host();
         self.process_events();
+        // 抽千 libmpv 下载器回传的状态（进度/完成/失败）
+        self.libmpv_installer.poll();
 
+        // 内置播放层：接管整个窗口，避免爬虫/详情页在播放时还在后台刷新
+        if self.player_overlay.visible {
+            self.sync_internal_player();
+
+            // ESC 返回：全屏时先退出全屏，否则关闭播放层
+            // 使用专用线程的原子标志（15ms 轮询，即使窗口失焦也能检测到）
+            //
+            // 注意：同一帧里可能 egui 输入和轮询线程都报出这次 ESC，
+            // 如果不去重，就会先退全屏、下一帧再当成"新的一次 ESC"关掉播放。
+            // 所以用一个 700ms 的冷却窗口，同一次按键只算一次。
+            {
+                let esc_flag = self.esc_flag.load(std::sync::atomic::Ordering::SeqCst);
+                let egui_esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+                if esc_flag || egui_esc {
+                    // 无论是否因冷却被忽略，都要清掉标志，避免残留到下一帧
+                    self.esc_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+
+                    let now = std::time::Instant::now();
+                    let too_soon = self
+                        .last_esc
+                        .map(|t| now.duration_since(t) < Duration::from_millis(700))
+                        .unwrap_or(false);
+                    if !too_soon {
+                        self.last_esc = Some(now);
+                        if self.player_overlay.fullscreen {
+                            // 全屏时 ESC 只退全屏，绝不关播放
+                            self.toggle_fullscreen(ctx);
+                        } else {
+                            self.stop_internal_player();
+                        }
+                    }
+                }
+            }
+            // 空格暂停/恢复
+            if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+                self.toggle_internal_pause();
+            }
+            // 左右方向键 ±10s
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                self.seek_internal_relative(-10.0);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+                self.seek_internal_relative(10.0);
+            }
+            // F11 全屏切换
+            if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+                self.toggle_fullscreen(ctx);
+            }
+
+            self.ui_player_overlay(ctx);
+            self.draw_toast(ctx);
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+
+        self.textures.poll(ctx);
         self.draw_top_panel(ctx);
         match self.screen {
             Screen::Home => self.ui_home(ctx),
@@ -963,6 +1069,9 @@ impl eframe::App for TVApp {
 
 impl Drop for TVApp {
     fn drop(&mut self) {
+        if let Some(mut p) = self.internal.take() {
+            p.stop();
+        }
         if let Some(h) = &self.host {
             h.shutdown();
         }

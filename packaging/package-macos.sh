@@ -73,6 +73,26 @@ log "jlink    : $MODULES"
 install -m 0755 "$BIN" "$APP/Contents/MacOS/TVRust"
 install -m 0644 "$JAR" "$APP/Contents/MacOS/spider-host-all.jar"
 
+# ---------- 2b) libmpv（内置播放器）----------
+# 默认不捆绑，用 brew 装的 libmpv；要自带时：
+#   LIBMPV_DYLIB=/opt/homebrew/lib/libmpv.dylib ./packaging/package-macos.sh
+LIBMPV_DYLIB="${LIBMPV_DYLIB:-}"
+if [ -z "$LIBMPV_DYLIB" ]; then
+    for cand in \
+        "$ROOT/tv-rust/libmpv/lib/libmpv.dylib" \
+        "$ROOT/tv-rust/libmpv/libmpv.dylib"; do
+        if [ -f "$cand" ]; then LIBMPV_DYLIB="$cand"; break; fi
+    done
+fi
+LIBMPV_NOTE="not bundled (uses libmpv from Homebrew/existing install)"
+if [ -n "$LIBMPV_DYLIB" ] && [ -f "$LIBMPV_DYLIB" ]; then
+    install -m 0644 "$LIBMPV_DYLIB" "$APP/Contents/MacOS/libmpv.dylib"
+    LIBMPV_NOTE="bundled libmpv.dylib"
+    log "libmpv   : $LIBMPV_DYLIB -> Contents/MacOS/libmpv.dylib"
+else
+    log "libmpv   : not bundled (set LIBMPV_DYLIB=<file> to bundle it)"
+fi
+
 ICON="$ROOT/packaging/common/icon.icns"
 if [ -f "$ICON" ]; then
     install -m 0644 "$ICON" "$APP/Contents/Resources/icon.icns"
@@ -106,6 +126,7 @@ version : $VERSION
 built   : $(date '+%Y-%m-%d %H:%M:%S')
 runtime : jlink $MODULES
 arch    : $HOST_ARCH
+libmpv  : $LIBMPV_NOTE
 
 Open TVRust.app. The bundled runtime under Contents/MacOS/runtime is used
 automatically; no system-wide Java installation is required.

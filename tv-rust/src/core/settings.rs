@@ -23,6 +23,8 @@ pub struct Settings {
     pub host_memory_mb: u32,
     /// 上次使用的站源 key（重启后恢复，避免总是回到配置里的第一个站）
     pub last_site_key: Option<String>,
+    /// 内置播放器默认音量 0-100
+    pub internal_volume: u8,
 }
 
 impl Default for Settings {
@@ -37,6 +39,7 @@ impl Default for Settings {
             // JDK 25（LTS）下 G1 + 字符串去重让同样负载的堆占用更可控，512m 足够跑爬虫宿主
             host_memory_mb: 512,
             last_site_key: None,
+            internal_volume: 100,
         }
     }
 }
@@ -141,6 +144,108 @@ pub fn autodetect_host_jar() -> Option<PathBuf> {
 pub struct DetectedPlayer {
     pub kind: String, // vlc / mpv / mpc / potplayer
     pub path: String,
+}
+
+/// 探测 libmpv 动态库（内置播放器依赖它）。
+/// Windows 找 mpv-2.dll / libmpv-2.dll / mpv.dll；
+/// Linux 找 libmpv.so.2 / libmpv.so。
+pub fn detect_libmpv() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let candidates = [
+            r"C:\Program Files\mpv\mpv-2.dll",
+            r"C:\Program Files\mpv\libmpv-2.dll",
+            r"C:\Program Files (x86)\mpv\mpv-2.dll",
+            r"D:\Program Files\mpv\mpv-2.dll",
+            r"D:\Program Files\mpv\libmpv-2.dll",
+        ];
+        for p in &candidates {
+            if PathBuf::from(p).is_file() {
+                return Some(p.to_string());
+            }
+        }
+        // 随包分发：exe 同级目录 或 mpv/ 子目录
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for name in &["mpv-2.dll", "libmpv-2.dll", "mpv.dll"] {
+                    // 先查根目录
+                    let root = dir.join(name);
+                    if root.is_file() {
+                        return Some(root.to_string_lossy().into_owned());
+                    }
+                    // 再查 mpv/ 子目录
+                    let sub = dir.join("mpv").join(name);
+                    if sub.is_file() {
+                        return Some(sub.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        // 应用内下载安装的内置播放器组件（%AppData%\TV-Multiplatform\cache\libmpv）
+        if let Some(p) = crate::core::libmpv_install::installed_dll() {
+            return Some(p.to_string_lossy().into_owned());
+        }
+        // PATH 搜索
+        if let Ok(paths) = std::env::var("PATH") {
+            for dir in paths.split(';') {
+                for name in &["mpv-2.dll", "libmpv-2.dll", "mpv.dll"] {
+                    let p = PathBuf::from(dir).join(name);
+                    if p.is_file() {
+                        return Some(p.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        // 随包分发：exe 同级目录优先（便携包里直接放的 libmpv）
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for name in &["libmpv.so.2", "libmpv.so", "libmpv.2.dylib", "libmpv.dylib"] {
+                    let p = dir.join(name);
+                    if p.is_file() {
+                        return Some(p.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        // 应用内下载安装的内置播放器组件
+        if let Some(p) = crate::core::libmpv_install::installed_dll() {
+            return Some(p.to_string_lossy().into_owned());
+        }
+        let candidates = [
+            "/usr/lib/x86_64-linux-gnu/libmpv.so.2",
+            "/usr/lib/x86_64-linux-gnu/libmpv.so",
+            "/usr/lib/libmpv.so.2",
+            "/usr/lib/libmpv.so",
+            "/usr/local/lib/libmpv.so.2",
+            "/usr/local/lib/libmpv.so",
+            "/opt/homebrew/lib/libmpv.dylib",
+        ];
+        for p in &candidates {
+            if PathBuf::from(p).is_file() {
+                return Some(p.to_string());
+            }
+        }
+        // ldconfig / PATH 搜索
+        if let Ok(output) = std::process::Command::new("ldconfig").arg("-p").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.contains("libmpv.so") {
+                    if let Some(path) = line.split("=>").nth(1) {
+                        let path = path.trim();
+                        if PathBuf::from(path).is_file() {
+                            return Some(path.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// 自动探测外部播放器（PATH + 常见安装路径）
