@@ -93,10 +93,18 @@ pub fn set_host_hwnd(hwnd: isize) {
     HOST_HWND.store(hwnd, Ordering::SeqCst);
 }
 
+#[cfg(not(windows))]
+pub fn set_host_hwnd(_hwnd: isize) {}
+
 #[cfg(windows)]
 pub fn host_hwnd() -> Option<isize> {
     let h = HOST_HWND.load(Ordering::SeqCst);
     if h == 0 { None } else { Some(h) }
+}
+
+#[cfg(not(windows))]
+pub fn host_hwnd() -> Option<isize> {
+    None
 }
 
 // ========== 事件 ==========
