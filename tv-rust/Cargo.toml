@@ -6,7 +6,10 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 dirs = "7.0.0"
-eframe = { version = "0.32", default-features = false, features = ["glow"] }
+# 注意：不要关掉 eframe 的默认特性。它的 default 里包含 x11 / wayland / winit/default，
+# 少了这两个后端，Linux 上 winit 会直接 compile_error!("The platform you're compiling for
+# is not supported by winit")。glow 显式写上，表示只用 OpenGL 后端（不引 wgpu）。
+eframe = { version = "0.32", features = ["glow"] }
 egui = "0.32"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 md-5 = "0.11.0"
